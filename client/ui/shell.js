@@ -1,4 +1,5 @@
 import { attachManualUI } from "./manual.js";
+import { attachRoomUI } from "./room.js";
 
 const app = document.getElementById("app");
 if (!app) throw new Error("#app element not found");
@@ -38,7 +39,7 @@ app.innerHTML = `
       <div id="modal-body">
         <div id="modal-tabs">
           <button class="tab active" data-mode="manual">Manual</button>
-          <button class="tab" data-mode="room" disabled>Room (coming soon)</button>
+          <button class="tab" data-mode="room">Room</button>
         </div>
         <div id="modal-content"></div>
       </div>
@@ -67,12 +68,27 @@ document.addEventListener("click", (e) => {
 const overlay = document.getElementById("modal-overlay");
 const modalClose = document.getElementById("modal-close");
 const modalContent = document.getElementById("modal-content");
+const tabs = document.querySelectorAll("#modal-tabs .tab");
+
+let currentMode = "manual";
+
+function showMode(mode) {
+  currentMode = mode;
+  tabs.forEach((t) => t.classList.toggle("active", t.dataset.mode === mode));
+  modalContent.innerHTML = "";
+  if (mode === "manual") attachManualUI(modalContent);
+  else if (mode === "room") attachRoomUI(modalContent);
+}
+
+tabs.forEach((tab) => {
+  tab.addEventListener("click", () => showMode(tab.dataset.mode));
+});
 
 document.getElementById("menu-connect").addEventListener("click", () => {
   menuOpen = false;
   menuPanel.classList.remove("open");
   overlay.style.display = "flex";
-  attachManualUI(modalContent);
+  showMode("manual");
 });
 
 modalClose.addEventListener("click", () => {

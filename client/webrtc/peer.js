@@ -56,4 +56,22 @@ export async function acceptAnswer(pc, answerEncoded, passphrase) {
   return pc;
 }
 
+export async function createRoomAnswer(offerSdp, onDataChannel) {
+  const pc = createPeerConnection();
+  let dc = null;
+  pc.addEventListener("datachannel", (e) => {
+    dc = e.channel;
+    dc.addEventListener("open", () => onDataChannel?.(dc));
+  });
+  await pc.setRemoteDescription({ type: "offer", sdp: offerSdp });
+  const answer = await pc.createAnswer();
+  await pc.setLocalDescription(answer);
+  const sdp = await waitForIceGathering(pc);
+  return { pc, dc, sdp };
+}
+
+export async function acceptRoomAnswer(pc, answerSdp) {
+  await pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
+}
+
 export { encryptSDP, decryptSDP };

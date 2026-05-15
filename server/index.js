@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { WebSocketServer } from "ws";
+import { createRoom, joinRoom, signal, removeConnection } from "./rooms.js";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const CLIENT_DIR = path.join(ROOT, "client");
@@ -80,9 +81,28 @@ server.on("upgrade", (req, socket, head) => {
 });
 
 wss.on("connection", (ws) => {
-  // Phase 1: accept connections, no room logic yet
-  ws.on("message", (data) => {
-    // Room forwarding will be added in Phase 3
+  ws.on("message", (raw) => {
+    let msg;
+    try {
+      msg = JSON.parse(raw.toString());
+    } catch {
+      return;
+    }
+    const { type, room, password } = msg;
+    if (type === "create") {
+      if (!room || !password) return;
+      createRoom(room, password, ws);
+    } else if (type === "join") {
+      if (!room || !password) return;
+      joinRoom(room, password, ws);
+    } else if (type === "signal") {
+      if (!room || !msg.data) return;
+      signal(ws, msg.data, room);
+    }
+  });
+
+  ws.on("close", () => {
+    removeConnection(ws);
   });
 });
 
