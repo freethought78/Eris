@@ -93,17 +93,22 @@ export async function acceptRoomAnswer(pc, answerSdp) {
 
 export function setupRenegotiation(pc, signalDC, { onRemoteTrack, onRemoteTrackEnded } = {}) {
   let makingOffer = false;
+  let renegTimer = null;
 
-  pc.addEventListener("negotiationneeded", async () => {
-    try {
-      makingOffer = true;
-      await pc.setLocalDescription(await pc.createOffer());
-      signalDC.send(JSON.stringify({ type: "reneg-offer", sdp: pc.localDescription.sdp }));
-    } catch (err) {
-      if (err.name !== "InvalidStateError") throw err;
-    } finally {
-      makingOffer = false;
-    }
+  pc.addEventListener("negotiationneeded", () => {
+    if (renegTimer) return;
+    renegTimer = setTimeout(async () => {
+      renegTimer = null;
+      try {
+        makingOffer = true;
+        await pc.setLocalDescription(await pc.createOffer());
+        signalDC.send(JSON.stringify({ type: "reneg-offer", sdp: pc.localDescription.sdp }));
+      } catch (err) {
+        if (err.name !== "InvalidStateError") throw err;
+      } finally {
+        makingOffer = false;
+      }
+    }, 100);
   });
 
   pc.addEventListener("track", (e) => {

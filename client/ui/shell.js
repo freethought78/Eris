@@ -192,6 +192,10 @@ document.addEventListener("eris-connected", (e) => {
     let msg;
     try { msg = JSON.parse(e.data); } catch { return; }
     if (msg.type === "media-kind") pendingMediaKind = msg.kind;
+    else if (msg.type === "media-ended") {
+      const tileId = msg.kind === "screen" ? "remote-screen" : "remote-cam";
+      removeTile(tileId);
+    }
   });
 
   document.getElementById("btn-mic").disabled = false;
@@ -264,6 +268,7 @@ async function toggleCam() {
 async function toggleScreen() {
   if (!activePC) return;
   if (screenStream) {
+    activeSignalDC?.send(JSON.stringify({ type: "media-ended", kind: "screen" }));
     removeMediaFromPC(activePC, screenStream);
     stopStream(screenStream);
     screenStream = null;
@@ -277,6 +282,8 @@ async function toggleScreen() {
     screenStream = stream;
 
     stream.getVideoTracks()[0]?.addEventListener("ended", () => {
+      if (!screenStream) return;
+      activeSignalDC?.send(JSON.stringify({ type: "media-ended", kind: "screen" }));
       removeMediaFromPC(activePC, screenStream);
       stopStream(screenStream);
       screenStream = null;
