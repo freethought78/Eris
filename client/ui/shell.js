@@ -27,7 +27,9 @@ app.innerHTML = `
     <footer id="toolbar">
       <button id="btn-mic" class="toolbar-btn" disabled title="Microphone">🎤</button>
       <button id="btn-cam" class="toolbar-btn" disabled title="Camera">📷</button>
-      <button id="btn-screen" class="toolbar-btn" disabled title="Share screen">🖥</button>
+      <button id="btn-screen" class="toolbar-btn" disabled title="Share screen">📺</button>
+      <button id="btn-file" class="toolbar-btn" disabled title="Send file">📎</button>
+      <input type="file" id="chat-file-picker" style="display:none">
     </footer>
   </div>
 
@@ -201,6 +203,7 @@ document.addEventListener("eris-connected", (e) => {
   document.getElementById("btn-mic").disabled = false;
   document.getElementById("btn-cam").disabled = false;
   document.getElementById("btn-screen").disabled = false;
+  document.getElementById("btn-file").disabled = false;
 });
 
 // ── Media controls ──
@@ -208,10 +211,12 @@ document.addEventListener("eris-connected", (e) => {
 const btnMic = document.getElementById("btn-mic");
 const btnCam = document.getElementById("btn-cam");
 const btnScreen = document.getElementById("btn-screen");
+const btnFile = document.getElementById("btn-file");
 
 btnMic.addEventListener("click", toggleMic);
 btnCam.addEventListener("click", toggleCam);
 btnScreen.addEventListener("click", toggleScreen);
+btnFile.addEventListener("click", () => document.getElementById("chat-file-picker")?.click());
 
 async function toggleMic() {
   if (!activePC) return;

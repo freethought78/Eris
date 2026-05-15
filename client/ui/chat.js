@@ -8,9 +8,7 @@ export function attachChatUI(container, { dc, dcFile, displayName }) {
     <div id="chat-messages"></div>
     <div id="chat-input-bar">
       <input type="text" id="chat-input" placeholder="Type a message..." autocomplete="off">
-      <button id="chat-file-btn" class="btn small" title="Send file">📎</button>
       <button id="chat-send" class="btn small">Send</button>
-      <input type="file" id="chat-file-picker" style="display:none">
     </div>
   `;
   container.appendChild(chat);
@@ -18,8 +16,7 @@ export function attachChatUI(container, { dc, dcFile, displayName }) {
   const msgContainer = chat.querySelector("#chat-messages");
   const input = chat.querySelector("#chat-input");
   const sendBtn = chat.querySelector("#chat-send");
-  const fileBtn = chat.querySelector("#chat-file-btn");
-  const filePicker = chat.querySelector("#chat-file-picker");
+  const filePicker = document.getElementById("chat-file-picker");
 
   const channel = createTextChannel(dc, {
     onMessage: (msg) => addMessage(msg.from, msg.text, msg.ts),
@@ -60,8 +57,6 @@ export function attachChatUI(container, { dc, dcFile, displayName }) {
   sendBtn.addEventListener("click", send);
 
   // File picker
-  fileBtn.addEventListener("click", () => filePicker.click());
-
   filePicker.addEventListener("change", async () => {
     const file = filePicker.files?.[0];
     if (!file || !dcFile) return;
