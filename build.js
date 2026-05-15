@@ -14,6 +14,11 @@ if (!fs.existsSync(BUNDLE_DIR)) fs.mkdirSync(BUNDLE_DIR, { recursive: true });
 // For a zero-dep build, we collect all files, then write them into a single temp dir.
 const tmp = fs.mkdtempSync(path.join(ROOT, ".mesh-build-"));
 try {
+  // Copy launcher scripts into the zip root
+  for (const launcher of ["start-server.bat", "start-server.sh"]) {
+    const src = path.join(ROOT, launcher);
+    if (fs.existsSync(src)) fs.copyFileSync(src, path.join(tmp, launcher));
+  }
   // Copy client/
   copyDir(CLIENT_DIR, path.join(tmp, "client"));
   // Copy server/ (exclude node_modules)
