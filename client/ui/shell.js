@@ -235,7 +235,7 @@ document.addEventListener("eris-connected", (e) => {
 
   // File transfer
   initFileTransfer(signal, file, {
-    onProgress: (p) => chatHandle.showFileProgress(p.name, p.chunk, p.total, p.direction),
+    onProgress: (p) => chatHandle.showFileProgress(p.name, p.chunk, p.total, p.direction, cancelTransfer),
     onComplete: (p) => chatHandle.showFileComplete(p.name, p.direction),
     onError: (p) => chatHandle.showFileError(p.name, p.error),
   });

@@ -155,12 +155,19 @@ function showIncomingFile(msg) {
   };
   incomingOverlay.querySelector("#ft-incoming-accept").onclick = async () => {
     let writable = null;
-    // Try File System Access API
     if (window.showSaveFilePicker) {
       try {
         const handle = await window.showSaveFilePicker({ suggestedName: msg.name });
         writable = await handle.createWritable();
       } catch { return; } // user cancelled save dialog
+    } else {
+      // FS API not available — ask user to confirm download
+      const ok = await showDownloadConfirm(msg.name);
+      if (!ok) {
+        signalDC?.send(JSON.stringify({ type: "file-decline", id: msg.id }));
+        incoming = null;
+        return;
+      }
     }
     incoming.writable = writable;
     removeOverlays();
@@ -248,6 +255,26 @@ function onFileCancel(msg) {
     incoming = null;
     removeOverlays();
   }
+}
+
+// ── Download confirm (fallback when showSaveFilePicker unavailable) ──
+
+function showDownloadConfirm(name) {
+  return new Promise((resolve) => {
+    const el = overlay(`
+      <div class="ft-box">
+        <p class="ft-label">Save File</p>
+        <p class="ft-name">${esc(name)}</p>
+        <p class="ft-size">File will be saved to your Downloads folder.</p>
+        <div class="call-overlay-buttons">
+          <button class="call-btn call-btn-decline" id="ft-dl-cancel">Cancel</button>
+          <button class="call-btn call-btn-accept" id="ft-dl-start">Start Download</button>
+        </div>
+      </div>
+    `);
+    el.querySelector("#ft-dl-cancel").onclick = () => { el.remove(); resolve(false); };
+    el.querySelector("#ft-dl-start").onclick = () => { el.remove(); resolve(true); };
+  });
 }
 
 // ── Helpers ──

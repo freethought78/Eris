@@ -60,24 +60,48 @@ export function attachChatUI(container, { dc, displayName }) {
   const progressBars = new Map();
 
   return {
-    showFileProgress(name, chunk, total, direction) {
+    showFileProgress(name, chunk, total, direction, onCancel) {
       const key = escapeId(name);
-      let bar = document.getElementById("file-progress-" + key);
-      if (!bar) {
+      let row = document.getElementById("file-row-" + key);
+      if (!row) {
         const label = direction === "send" ? "Sending" : "Receiving";
-        bar = document.createElement("progress");
+        row = document.createElement("div");
+        row.id = "file-row-" + key;
+        row.style.display = "flex";
+        row.style.alignItems = "center";
+        row.style.gap = "8px";
+        row.style.marginTop = "4px";
+
+        const bar = document.createElement("progress");
         bar.id = "file-progress-" + key;
         bar.className = "file-progress";
+        bar.style.flex = "1";
         bar.max = total;
         bar.value = 0;
-        addFileMessage(direction === "send" ? "You" : "Peer", label + ": " + escapeHtml(name), bar);
+        row.appendChild(bar);
+
+        if (onCancel) {
+          const cancelBtn = document.createElement("button");
+          cancelBtn.className = "btn small";
+          cancelBtn.textContent = "Cancel";
+          cancelBtn.onclick = () => {
+            cancelBtn.disabled = true;
+            cancelBtn.textContent = "Stopping...";
+            onCancel();
+          };
+          row.appendChild(cancelBtn);
+        }
+
+        addFileMessage(direction === "send" ? "You" : "Peer", label + ": " + escapeHtml(name), row);
       }
-      bar.max = total;
-      bar.value = chunk;
+      const bar = row.querySelector("progress");
+      if (bar) { bar.max = total; bar.value = chunk; }
     },
 
     showFileComplete(name, direction) {
       addMessage(direction === "send" ? "You" : "Peer", (direction === "send" ? "Sent" : "Received") + ": " + name, Date.now());
+      const row = document.getElementById("file-row-" + escapeId(name));
+      if (row) { const btn = row.querySelector("button"); if (btn) btn.disabled = true; }
     },
 
     showFileError(name, err) {
