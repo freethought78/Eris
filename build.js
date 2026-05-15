@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
+import { execSync } from "node:child_process";
 
 const ROOT = path.resolve(import.meta.dirname);
 const CLIENT_DIR = path.join(ROOT, "client");
@@ -9,6 +10,16 @@ const BUNDLE_DIR = path.join(ROOT, "bundle");
 const OUT_ZIP = path.join(BUNDLE_DIR, "eris.zip");
 
 if (!fs.existsSync(BUNDLE_DIR)) fs.mkdirSync(BUNDLE_DIR, { recursive: true });
+
+// Bundle client JS so it works when opened via file:// (Chrome blocks ES modules on local files)
+console.log("Bundling client JS...");
+const bundleEntry = path.join(CLIENT_DIR, "app.js");
+const bundleOut = path.join(CLIENT_DIR, "bundle.js");
+execSync(
+  `npx esbuild ${JSON.stringify(bundleEntry)} --bundle --outfile=${JSON.stringify(bundleOut)} --platform=browser --format=iife`,
+  { stdio: "pipe" }
+);
+console.log("Built client/bundle.js");
 
 // Build a simple zip using the archiver pattern with Node built-ins.
 // For a zero-dep build, we collect all files, then write them into a single temp dir.
@@ -47,9 +58,6 @@ function copyDir(src, dest, filter) {
 }
 
 async function zipDir(srcDir, outPath) {
-  // Use Node built-in zlib + a manual zip writer.
-  // For simplicity, shell out to Compress-Archive on Windows or fallback.
-  const { execSync } = await import("node:child_process");
   execSync(
     `powershell -NoProfile -Command "Compress-Archive -Path '${srcDir}\\*' -DestinationPath '${outPath}' -Force"`,
     { stdio: "pipe" }

@@ -8,6 +8,13 @@
 </head>
 <body>
   <div id="app"></div>
-  <script type="module" src="app.js"></script>
+  <script>
+    // When opened via file://, load the bundled script (Chrome blocks ES modules on local files)
+    if (location.protocol === "file:") {
+      document.write('<script src="bundle.js"><\/script>');
+    } else {
+      document.write('<script type="module" src="app.js"><\/script>');
+    }
+  </script>
 </body>
 </html>

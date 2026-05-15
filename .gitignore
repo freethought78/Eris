@@ -1,5 +1,6 @@
 node_modules/
 bundle/eris.zip
 client/eris.zip
+client/bundle.js
 .server-*.txt
 .test-*.txt

@@ -46,7 +46,6 @@ export function attachManualUI(container) {
   let pc = null;
   let dcChat = null;
   let dcFile = null;
-  let pendingAnswerPc = null;
 
   const nameInput = container.querySelector("#manual-name");
   const displayName = () => nameInput.value.trim() || "You";
@@ -97,7 +96,7 @@ export function attachManualUI(container) {
     btnAnswer.textContent = "Generating...";
     try {
       const result = await createAnswer(inputOffer.value.trim(), passphrase(), onChannelsOpen);
-      pendingAnswerPc = result.pc;
+      pc = result.pc;
       const encrypted = await encryptSDP(result.sdp, passphrase());
       answerText.value = encrypted;
       answerOutput.style.display = "block";
