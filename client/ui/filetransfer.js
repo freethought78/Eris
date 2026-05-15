@@ -84,7 +84,7 @@ function showPendingSend(id, name) {
 async function onFileAccept(msg) {
   if (!outgoing || outgoing.id !== msg.id || outgoing.aborted) return;
   removeOverlays();
-  callbacks.onProgress?.({ name: outgoing.file.name, chunk: 0, total: Math.ceil(outgoing.file.size / CHUNK_SIZE), direction: "send" });
+  try { callbacks.onProgress?.({ name: outgoing.file.name, chunk: 0, total: Math.ceil(outgoing.file.size / CHUNK_SIZE), direction: "send" }); } catch {}
   await doSend(outgoing.id, outgoing.file);
 }
 
@@ -101,20 +101,27 @@ async function doSend(id, file) {
 
   return new Promise((resolve) => {
     const reader = new FileReader();
-    reader.onerror = () => { callbacks.onError?.({ name: file.name, error: reader.error }); resolve(); };
+    reader.onerror = () => {
+      if (!outgoing || outgoing.id !== id) { resolve(); return; }
+      try { callbacks.onError?.({ name: file.name, error: reader.error }); } catch {}
+      resolve();
+    };
     reader.onload = () => {
-      if (outgoing?.aborted) {
-        outgoing = null;
+      if (!outgoing || outgoing.id !== id || outgoing.aborted) {
+        if (outgoing && outgoing.id === id) {
+          outgoing = null;
+        }
         resolve();
         return;
       }
       const data = bufToBase64(reader.result);
       fileDC?.send(JSON.stringify({ id, name: file.name, size: file.size, chunk, total, data }));
       chunk++;
-      callbacks.onProgress?.({ name: file.name, chunk, total, direction: "send" });
-      if (chunk < total) readNext();
-      else {
-        callbacks.onComplete?.({ name: file.name, direction: "send" });
+      try { callbacks.onProgress?.({ name: file.name, chunk, total, direction: "send" }); } catch {}
+      if (chunk < total) {
+        readNext();
+      } else {
+        try { callbacks.onComplete?.({ name: file.name, direction: "send" }); } catch {}
         outgoing = null;
         resolve();
       }
@@ -168,7 +175,7 @@ function showIncomingFile(msg) {
     incoming.writable = writable;
     removeOverlays();
     signalDC?.send(JSON.stringify({ type: "file-accept", id: msg.id }));
-    callbacks.onProgress?.({ name: msg.name, chunk: 0, total: incoming.total, direction: "receive" });
+    try { callbacks.onProgress?.({ name: msg.name, chunk: 0, total: incoming.total, direction: "receive" }); } catch {}
   };
 }
 
@@ -178,7 +185,7 @@ function onChunk(msg) {
 
   if (msg.chunk === 0 && msg.name) incoming.name = msg.name;
   incoming.chunks[msg.chunk] = msg.data;
-  callbacks.onProgress?.({ name: incoming.name, chunk: incoming.chunks.length, total: incoming.total, direction: "receive" });
+  try { callbacks.onProgress?.({ name: incoming.name, chunk: incoming.chunks.length, total: incoming.total, direction: "receive" }); } catch {}
 
   if (incoming.chunks.length === incoming.total && incoming.chunks.every((c) => c !== undefined)) {
     finishReceive();
@@ -196,23 +203,23 @@ async function finishReceive() {
   }
   const blob = new Blob([combined]);
 
-  if (incoming.writable) {
-    try {
+  try {
+    if (incoming.writable) {
       await incoming.writable.write(blob);
       await incoming.writable.close();
-      callbacks.onComplete?.({ name: incoming.name, direction: "receive", location: "Saved using system dialog" });
-    } catch (err) {
-      callbacks.onError?.({ name: incoming.name, error: err });
+      try { callbacks.onComplete?.({ name: incoming.name, direction: "receive", location: "Saved using system dialog" }); } catch {}
+    } else {
+      // Fallback: download via link
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = incoming.name;
+      a.click();
+      URL.revokeObjectURL(url);
+      try { callbacks.onComplete?.({ name: incoming.name, direction: "receive", location: "Downloads folder (default)" }); } catch {}
     }
-  } else {
-    // Fallback: download via link
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = incoming.name;
-    a.click();
-    URL.revokeObjectURL(url);
-    callbacks.onComplete?.({ name: incoming.name, direction: "receive", location: "Downloads folder (default)" });
+  } catch (err) {
+    try { callbacks.onError?.({ name: incoming.name, error: err }); } catch {}
   }
 
   incoming = null;
@@ -224,13 +231,15 @@ export function cancelTransfer() {
   if (outgoing && !outgoing.aborted) {
     outgoing.aborted = true;
     signalDC?.send(JSON.stringify({ type: "file-cancel", id: outgoing.id }));
-    callbacks.onCancelled?.({ name: outgoing.file.name, direction: "send" });
+    try { callbacks.onCancelled?.({ name: outgoing.file.name, direction: "send" }); } catch {}
+    outgoing = null;
   }
   if (incoming && !incoming.aborted) {
     incoming.aborted = true;
     if (incoming.writable) incoming.writable.close().catch(() => {});
     signalDC?.send(JSON.stringify({ type: "file-cancel", id: incoming.id }));
-    callbacks.onCancelled?.({ name: incoming.name, direction: "receive" });
+    try { callbacks.onCancelled?.({ name: incoming.name, direction: "receive" }); } catch {}
+    incoming = null;
   }
   removeOverlays();
 }
@@ -238,13 +247,15 @@ export function cancelTransfer() {
 function onFileCancel(msg) {
   if (outgoing && outgoing.id === msg.id) {
     outgoing.aborted = true;
-    callbacks.onCancelled?.({ name: outgoing.file.name, direction: "send" });
+    try { callbacks.onCancelled?.({ name: outgoing.file.name, direction: "send" }); } catch {}
+    outgoing = null;
     removeOverlays();
   }
   if (incoming && incoming.id === msg.id) {
     incoming.aborted = true;
     if (incoming.writable) incoming.writable.close().catch(() => {});
-    callbacks.onCancelled?.({ name: incoming.name, direction: "receive" });
+    try { callbacks.onCancelled?.({ name: incoming.name, direction: "receive" }); } catch {}
+    incoming = null;
     removeOverlays();
   }
 }
