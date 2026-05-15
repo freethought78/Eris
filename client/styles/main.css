@@ -152,6 +152,17 @@ html, body {
   opacity: 0.8;
 }
 
+.toolbar-btn.hangup {
+  background: #8b0000;
+  border-color: #8b0000;
+  opacity: 0.9;
+}
+
+.toolbar-btn.hangup:hover {
+  background: #cc0000;
+  border-color: #cc0000;
+}
+
 #peer-list { list-style: none; }
 
 /* ── Menu Panel ── */
@@ -509,13 +520,9 @@ textarea {
 .video-tile video {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   display: block;
   pointer-events: none;
-}
-
-.video-tile video[data-screen] {
-  object-fit: contain;
 }
 
 .tile-controls {

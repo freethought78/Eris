@@ -30,6 +30,7 @@ app.innerHTML = `
       <button id="btn-cam" class="toolbar-btn" disabled title="Camera">📷</button>
       <button id="btn-screen" class="toolbar-btn" disabled title="Share screen">📺</button>
       <button id="btn-file" class="toolbar-btn" disabled title="Send file">📎</button>
+      <button id="btn-hangup" class="toolbar-btn hangup" style="display:none" title="End call">📞✕</button>
       <input type="file" id="chat-file-picker" style="display:none">
     </footer>
   </div>
@@ -205,10 +206,12 @@ document.addEventListener("eris-connected", (e) => {
       }
     }
     btnMic.classList.remove("active", "muted");
+    btnHangup.style.display = "none";
   };
 
   initCall(signal, "Peer", {
     onCallAccepted: async () => {
+      btnHangup.style.display = "";
       try {
         if (!localStream) localStream = await getStream({ audio: true, video: false });
         else {
@@ -267,11 +270,16 @@ const btnMic = document.getElementById("btn-mic");
 const btnCam = document.getElementById("btn-cam");
 const btnScreen = document.getElementById("btn-screen");
 const btnFile = document.getElementById("btn-file");
+const btnHangup = document.getElementById("btn-hangup");
 
 btnMic.addEventListener("click", toggleMic);
 btnCam.addEventListener("click", toggleCam);
 btnScreen.addEventListener("click", toggleScreen);
 btnFile.addEventListener("click", () => document.getElementById("chat-file-picker")?.click());
+btnHangup.addEventListener("click", () => {
+  endCall("audio");
+  // cleanupCall fires via onCallEnded callback
+});
 
 async function toggleMic() {
   if (!activePC) return;

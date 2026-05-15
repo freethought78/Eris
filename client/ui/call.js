@@ -52,6 +52,7 @@ export function cancelCall() {
   if (state !== "calling") return;
   signalDC?.send(JSON.stringify({ type: "call-canceled" }));
   resetCallState();
+  showToast("Call canceled");
 }
 
 export function endCall(kind) {
@@ -67,6 +68,7 @@ export function acceptCall() {
   signalDC?.send(JSON.stringify({ type: "call-accepted" }));
   stopRingtone();
   removeOverlay();
+  showToast("Voice call connected");
   onCallAccepted?.();
 }
 
@@ -97,6 +99,7 @@ export function handleCallSignal(msg) {
       state = "connected";
       stopRingtone();
       removeIndicator();
+      showToast("Voice call connected");
       onCallAccepted?.();
       break;
 
