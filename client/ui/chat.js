@@ -98,10 +98,20 @@ export function attachChatUI(container, { dc, displayName }) {
       if (bar) { bar.max = total; bar.value = chunk; }
     },
 
-    showFileComplete(name, direction) {
-      addMessage(direction === "send" ? "You" : "Peer", (direction === "send" ? "Sent" : "Received") + ": " + name, Date.now());
+    showFileComplete(name, direction, location) {
+      const locationText = location ? " (" + location + ")" : "";
+      addMessage(direction === "send" ? "You" : "Peer", (direction === "send" ? "Sent" : "Received") + ": " + name + locationText, Date.now());
       const row = document.getElementById("file-row-" + escapeId(name));
-      if (row) { const btn = row.querySelector("button"); if (btn) btn.disabled = true; }
+      if (row) { row.style.opacity = "0.5"; const btn = row.querySelector("button"); if (btn) btn.disabled = true; }
+    },
+
+    showFileCancelled(name, direction) {
+      const row = document.getElementById("file-row-" + escapeId(name));
+      if (row) {
+        row.innerHTML = "<span style=\"color:#d59595;font-size:13px\">✕ Transfer cancelled</span>";
+      } else {
+        addMessage("System", "Transfer cancelled: " + name, Date.now());
+      }
     },
 
     showFileError(name, err) {

@@ -236,8 +236,9 @@ document.addEventListener("eris-connected", (e) => {
   // File transfer
   initFileTransfer(signal, file, {
     onProgress: (p) => chatHandle.showFileProgress(p.name, p.chunk, p.total, p.direction, cancelTransfer),
-    onComplete: (p) => chatHandle.showFileComplete(p.name, p.direction),
+    onComplete: (p) => chatHandle.showFileComplete(p.name, p.direction, p.location),
     onError: (p) => chatHandle.showFileError(p.name, p.error),
+    onCancelled: (p) => chatHandle.showFileCancelled(p.name, p.direction),
   });
 
   // Detect peer disconnect to end call

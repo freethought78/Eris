@@ -103,7 +103,11 @@ async function doSend(id, file) {
     const reader = new FileReader();
     reader.onerror = () => { callbacks.onError?.({ name: file.name, error: reader.error }); resolve(); };
     reader.onload = () => {
-      if (outgoing?.aborted) { resolve(); return; }
+      if (outgoing?.aborted) {
+        outgoing = null;
+        resolve();
+        return;
+      }
       const data = bufToBase64(reader.result);
       fileDC?.send(JSON.stringify({ id, name: file.name, size: file.size, chunk, total, data }));
       chunk++;
@@ -160,14 +164,6 @@ function showIncomingFile(msg) {
         const handle = await window.showSaveFilePicker({ suggestedName: msg.name });
         writable = await handle.createWritable();
       } catch { return; } // user cancelled save dialog
-    } else {
-      // FS API not available — ask user to confirm download
-      const ok = await showDownloadConfirm(msg.name);
-      if (!ok) {
-        signalDC?.send(JSON.stringify({ type: "file-decline", id: msg.id }));
-        incoming = null;
-        return;
-      }
     }
     incoming.writable = writable;
     removeOverlays();
@@ -204,7 +200,7 @@ async function finishReceive() {
     try {
       await incoming.writable.write(blob);
       await incoming.writable.close();
-      showToast("File saved: " + incoming.name);
+      callbacks.onComplete?.({ name: incoming.name, direction: "receive", location: "Saved using system dialog" });
     } catch (err) {
       callbacks.onError?.({ name: incoming.name, error: err });
     }
@@ -216,9 +212,9 @@ async function finishReceive() {
     a.download = incoming.name;
     a.click();
     URL.revokeObjectURL(url);
+    callbacks.onComplete?.({ name: incoming.name, direction: "receive", location: "Downloads folder (default)" });
   }
 
-  callbacks.onComplete?.({ name: incoming.name, direction: "receive" });
   incoming = null;
 }
 
@@ -228,15 +224,13 @@ export function cancelTransfer() {
   if (outgoing && !outgoing.aborted) {
     outgoing.aborted = true;
     signalDC?.send(JSON.stringify({ type: "file-cancel", id: outgoing.id }));
-    showToast("Transfer cancelled");
-    outgoing = null;
+    callbacks.onCancelled?.({ name: outgoing.file.name, direction: "send" });
   }
   if (incoming && !incoming.aborted) {
     incoming.aborted = true;
     if (incoming.writable) incoming.writable.close().catch(() => {});
     signalDC?.send(JSON.stringify({ type: "file-cancel", id: incoming.id }));
-    showToast("Transfer cancelled");
-    incoming = null;
+    callbacks.onCancelled?.({ name: incoming.name, direction: "receive" });
   }
   removeOverlays();
 }
@@ -244,37 +238,15 @@ export function cancelTransfer() {
 function onFileCancel(msg) {
   if (outgoing && outgoing.id === msg.id) {
     outgoing.aborted = true;
-    showToast("Peer cancelled the transfer");
-    outgoing = null;
+    callbacks.onCancelled?.({ name: outgoing.file.name, direction: "send" });
     removeOverlays();
   }
   if (incoming && incoming.id === msg.id) {
     incoming.aborted = true;
     if (incoming.writable) incoming.writable.close().catch(() => {});
-    showToast("Peer cancelled the transfer");
-    incoming = null;
+    callbacks.onCancelled?.({ name: incoming.name, direction: "receive" });
     removeOverlays();
   }
-}
-
-// ── Download confirm (fallback when showSaveFilePicker unavailable) ──
-
-function showDownloadConfirm(name) {
-  return new Promise((resolve) => {
-    const el = overlay(`
-      <div class="ft-box">
-        <p class="ft-label">Save File</p>
-        <p class="ft-name">${esc(name)}</p>
-        <p class="ft-size">File will be saved to your Downloads folder.</p>
-        <div class="call-overlay-buttons">
-          <button class="call-btn call-btn-decline" id="ft-dl-cancel">Cancel</button>
-          <button class="call-btn call-btn-accept" id="ft-dl-start">Start Download</button>
-        </div>
-      </div>
-    `);
-    el.querySelector("#ft-dl-cancel").onclick = () => { el.remove(); resolve(false); };
-    el.querySelector("#ft-dl-start").onclick = () => { el.remove(); resolve(true); };
-  });
 }
 
 // ── Helpers ──
