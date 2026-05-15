@@ -6,6 +6,8 @@ import { getStream, stopStream, addMediaToPC, removeMediaFromPC, createVideoElem
 import { getScreenStream } from "../channels/screen.js";
 import { initTileGrid, addTile, removeTile, hasTile } from "./tiles.js";
 import { initCall, requestCall, cancelCall, endCall, getCallState, resetCallState, setPeerName } from "./call.js";
+import { openSettingsPanel } from "./settings.js";
+import { initFileTransfer, startFileSend, cancelTransfer } from "./filetransfer.js";
 
 const app = document.getElementById("app");
 if (!app) throw new Error("#app element not found");
@@ -31,6 +33,7 @@ app.innerHTML = `
       <button id="btn-screen" class="toolbar-btn" disabled title="Share screen">📺</button>
       <button id="btn-file" class="toolbar-btn" disabled title="Send file">📎</button>
       <button id="btn-hangup" class="toolbar-btn hangup" style="display:none" title="End call">📞✕</button>
+      <button id="btn-settings" class="toolbar-btn" title="Settings">⚙️</button>
       <input type="file" id="chat-file-picker" style="display:none">
     </footer>
   </div>
@@ -142,7 +145,7 @@ document.addEventListener("eris-connected", (e) => {
   initTileGrid(document.getElementById("video-grid"));
 
   // Chat goes in bottom panel
-  attachChatUI(document.getElementById("bottom-panel"), { dc: chat, dcFile: file, displayName });
+  const chatHandle = attachChatUI(document.getElementById("bottom-panel"), { dc: chat, displayName });
 
   // Draggable divider
   const divider = document.getElementById("divider");
@@ -212,6 +215,7 @@ document.addEventListener("eris-connected", (e) => {
   initCall(signal, "Peer", {
     onCallAccepted: async () => {
       btnHangup.style.display = "";
+      btnMic.classList.add("active");
       try {
         if (!localStream) localStream = await getStream({ audio: true, video: false });
         else {
@@ -219,15 +223,21 @@ document.addEventListener("eris-connected", (e) => {
           for (const t of s.getAudioTracks()) localStream.addTrack(t);
         }
         addMediaToPC(activePC, localStream);
-        btnMic.classList.add("active");
         if (localStream.getVideoTracks().length && !hasTile("local-cam")) {
           addTile("local-cam", "You", localStream, true);
         }
       } catch {
-        // No mic — proceed listen-only; button stays inactive
+        // No mic — active already set; call is connected (listen-only)
       }
     },
     onCallEnded: cleanupCall,
+  });
+
+  // File transfer
+  initFileTransfer(signal, file, {
+    onProgress: (p) => chatHandle.showFileProgress(p.name, p.chunk, p.total, p.direction),
+    onComplete: (p) => chatHandle.showFileComplete(p.name, p.direction),
+    onError: (p) => chatHandle.showFileError(p.name, p.error),
   });
 
   // Detect peer disconnect to end call
@@ -271,15 +281,28 @@ const btnCam = document.getElementById("btn-cam");
 const btnScreen = document.getElementById("btn-screen");
 const btnFile = document.getElementById("btn-file");
 const btnHangup = document.getElementById("btn-hangup");
+const btnSettings = document.getElementById("btn-settings");
 
 btnMic.addEventListener("click", toggleMic);
 btnCam.addEventListener("click", toggleCam);
 btnScreen.addEventListener("click", toggleScreen);
-btnFile.addEventListener("click", () => document.getElementById("chat-file-picker")?.click());
+btnFile.addEventListener("click", () => {
+  const picker = document.getElementById("chat-file-picker");
+  if (picker) picker.value = "";
+  picker?.click();
+});
+document.getElementById("chat-file-picker")?.addEventListener("change", () => {
+  const picker = document.getElementById("chat-file-picker");
+  const file = picker?.files?.[0];
+  if (!file) return;
+  if (picker) picker.value = "";
+  startFileSend(file);
+});
 btnHangup.addEventListener("click", () => {
   endCall("audio");
   // cleanupCall fires via onCallEnded callback
 });
+btnSettings.addEventListener("click", () => openSettingsPanel({ getPC: () => activePC, getLocalStream: () => localStream, setLocalStream: (s) => { localStream = s; } }));
 
 async function toggleMic() {
   if (!activePC) return;

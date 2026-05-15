@@ -1,7 +1,6 @@
 import { createTextChannel } from "../channels/text.js";
-import { sendFile, receiveFile } from "../channels/file.js";
 
-export function attachChatUI(container, { dc, dcFile, displayName }) {
+export function attachChatUI(container, { dc, displayName }) {
   const chat = document.createElement("div");
   chat.id = "chat-ui";
   chat.innerHTML = `
@@ -16,7 +15,6 @@ export function attachChatUI(container, { dc, dcFile, displayName }) {
   const msgContainer = chat.querySelector("#chat-messages");
   const input = chat.querySelector("#chat-input");
   const sendBtn = chat.querySelector("#chat-send");
-  const filePicker = document.getElementById("chat-file-picker");
 
   const channel = createTextChannel(dc, {
     onMessage: (msg) => addMessage(msg.from, msg.text, msg.ts),
@@ -56,74 +54,36 @@ export function attachChatUI(container, { dc, dcFile, displayName }) {
   });
   sendBtn.addEventListener("click", send);
 
-  // File picker
-  filePicker.addEventListener("change", async () => {
-    const file = filePicker.files?.[0];
-    if (!file || !dcFile) return;
-    filePicker.value = "";
-
-    const bar = document.createElement("progress");
-    bar.className = "file-progress";
-    bar.max = 1;
-    bar.value = 0;
-
-    const msgDiv = addFileMessage(displayName || "You", `Sending: ${escapeHtml(file.name)}`, bar);
-    addMessage("You", `Sending file: ${file.name} (${formatSize(file.size)})`, Date.now());
-
-    try {
-      await sendFile(dcFile, file, {
-        onProgress: ({ chunk, total }) => {
-          bar.max = total;
-          bar.value = chunk;
-        },
-      });
-      addMessage("You", `Sent: ${file.name}`, Date.now());
-    } catch (err) {
-      addMessage("System", `Failed to send ${file.name}: ${err.message}`, Date.now());
-    }
-  });
-
-  // File receive
-  if (dcFile) {
-    receiveFile(dcFile, {
-      onProgress: ({ name, chunk, total }) => {
-        let bar = document.getElementById("file-progress-" + escapeId(name));
-        if (!bar) {
-          bar = document.createElement("progress");
-          bar.id = "file-progress-" + escapeId(name);
-          bar.className = "file-progress";
-          bar.max = total;
-          bar.value = 0;
-          addFileMessage("Peer", `Receiving: ${escapeHtml(name)}`, bar);
-        }
-        bar.max = total;
-        bar.value = chunk;
-      },
-      onComplete: ({ name, blob }) => {
-        addMessage("Peer", `Received: ${name}`, Date.now());
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = name;
-        a.textContent = `⬇ Download ${name}`;
-        a.className = "file-download";
-        const div = document.createElement("div");
-        div.className = "chat-msg";
-        div.innerHTML = `<span class="chat-sender">Peer</span> <span class="chat-time">${new Date().toLocaleTimeString()}</span><br>`;
-        div.appendChild(a);
-        msgContainer.appendChild(div);
-        msgContainer.scrollTop = msgContainer.scrollHeight;
-      },
-    });
-  }
-
   setTimeout(() => input.focus(), 100);
-}
 
-function formatSize(bytes) {
-  if (bytes < 1024) return bytes + " B";
-  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
-  return (bytes / 1048576).toFixed(1) + " MB";
+  // Expose file transfer display helpers
+  const progressBars = new Map();
+
+  return {
+    showFileProgress(name, chunk, total, direction) {
+      const key = escapeId(name);
+      let bar = document.getElementById("file-progress-" + key);
+      if (!bar) {
+        const label = direction === "send" ? "Sending" : "Receiving";
+        bar = document.createElement("progress");
+        bar.id = "file-progress-" + key;
+        bar.className = "file-progress";
+        bar.max = total;
+        bar.value = 0;
+        addFileMessage(direction === "send" ? "You" : "Peer", label + ": " + escapeHtml(name), bar);
+      }
+      bar.max = total;
+      bar.value = chunk;
+    },
+
+    showFileComplete(name, direction) {
+      addMessage(direction === "send" ? "You" : "Peer", (direction === "send" ? "Sent" : "Received") + ": " + name, Date.now());
+    },
+
+    showFileError(name, err) {
+      addMessage("System", "Failed to transfer " + name + ": " + (err.message || err), Date.now());
+    },
+  };
 }
 
 function escapeHtml(s) {
