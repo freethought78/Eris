@@ -17,15 +17,19 @@ export function stopStream(stream) {
 
 export function addMediaToPC(pc, stream) {
   for (const track of stream.getTracks()) {
-    pc.addTrack(track, stream);
+    const hasSender = pc.getSenders().some((s) => s.track === track);
+    if (!hasSender) pc.addTrack(track, stream);
   }
 }
 
-export function removeMediaFromPC(pc, stream) {
+export function removeMediaFromPC(pc, stream, kind) {
   if (!stream) return;
-  for (const track of stream.getTracks()) {
-    try { pc.removeTrack(pc.getSenders().find((s) => s.track === track)); } catch {}
+  const tracks = kind ? stream.getTracks().filter((t) => t.kind === kind) : [...stream.getTracks()];
+  for (const track of tracks) {
+    const sender = pc.getSenders().find((s) => s.track === track);
+    if (sender) { try { pc.removeTrack(sender); } catch {} }
     track.stop();
+    stream.removeTrack(track);
   }
 }
 

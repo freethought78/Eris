@@ -5,6 +5,7 @@ import { setupRenegotiation } from "../webrtc/peer.js";
 import { getStream, stopStream, addMediaToPC, removeMediaFromPC, createVideoElement } from "../channels/media.js";
 import { getScreenStream } from "../channels/screen.js";
 import { initTileGrid, addTile, removeTile, hasTile } from "./tiles.js";
+import { initCall, requestCall, cancelCall, endCall, getCallState, resetCallState, setPeerName } from "./call.js";
 
 const app = document.getElementById("app");
 if (!app) throw new Error("#app element not found");
@@ -190,13 +191,47 @@ document.addEventListener("eris-connected", (e) => {
     },
   });
 
+  // Peer name exchange
+  signal.send(JSON.stringify({ type: "peer-info", name: displayName }));
+
+  // Call flow
+  initCall(signal, "Peer", {
+    onCallAccepted: async () => {
+      try {
+        if (!localStream) localStream = await getStream({ audio: true, video: false });
+        else {
+          const s = await getStream({ audio: true, video: false });
+          for (const t of s.getAudioTracks()) localStream.addTrack(t);
+        }
+        addMediaToPC(activePC, localStream);
+        btnMic.classList.add("active");
+        if (localStream.getVideoTracks().length && !hasTile("local-cam")) {
+          addTile("local-cam", "You", localStream, true);
+        }
+      } catch (err) {
+        alert("Failed to start mic: " + err.message);
+      }
+    },
+    onCallEnded: () => {
+      if (localStream?.getAudioTracks().length) {
+        removeMediaFromPC(activePC, localStream, "audio");
+        if (!localStream.getTracks().length) {
+          stopStream(localStream);
+          localStream = null;
+          removeTile("local-cam");
+        }
+      }
+      btnMic.classList.remove("active");
+    },
+  });
+
   signal.addEventListener("message", (e) => {
     let msg;
     try { msg = JSON.parse(e.data); } catch { return; }
-    if (msg.type === "media-kind") pendingMediaKind = msg.kind;
-    else if (msg.type === "media-ended") {
-      const tileId = msg.kind === "screen" ? "remote-screen" : "remote-cam";
-      removeTile(tileId);
+    if (msg.type === "peer-info") setPeerName(msg.name);
+    else if (msg.type === "media-kind") pendingMediaKind = msg.kind;
+    else if (msg.type === "media-ended" && msg.kind === "screen") {
+      removeTile("remote-screen");
     }
   });
 
@@ -220,35 +255,24 @@ btnFile.addEventListener("click", () => document.getElementById("chat-file-picke
 
 async function toggleMic() {
   if (!activePC) return;
-  if (localStream?.getAudioTracks().length) {
-    removeMediaFromPC(activePC, localStream);
-    if (!localStream.getVideoTracks().length) {
-      stopStream(localStream);
-      localStream = null;
-      removeTile("local-cam");
-    }
+  const s = getCallState();
+  if (s === "idle") {
+    requestCall("audio");
+  } else if (s === "calling") {
+    cancelCall();
     btnMic.classList.remove("active");
-    return;
+  } else if (s === "connected") {
+    endCall("audio");
+    btnMic.classList.remove("active");
   }
-  try {
-    if (!localStream) localStream = await getStream({ audio: true, video: true });
-    else {
-      const s = await getStream({ audio: true, video: false });
-      for (const t of s.getAudioTracks()) localStream.addTrack(t);
-    }
-    addMediaToPC(activePC, localStream);
-    if (!hasTile("local-cam")) addTile("local-cam", "You", localStream, true);
-    btnMic.classList.add("active");
-  } catch (err) {
-    alert(err.message);
-  }
+  // s === "ringing" — overlay handles it; button does nothing
 }
 
 async function toggleCam() {
   if (!activePC) return;
   if (localStream?.getVideoTracks().length) {
-    removeMediaFromPC(activePC, localStream);
-    if (!localStream.getAudioTracks().length) {
+    removeMediaFromPC(activePC, localStream, "video");
+    if (!localStream.getTracks().length) {
       stopStream(localStream);
       localStream = null;
     }
