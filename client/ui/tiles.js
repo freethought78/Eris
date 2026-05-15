@@ -1,6 +1,5 @@
 let grid = null;
 const tileMap = new Map();
-let maximizedId = null;
 let draggedId = null;
 
 export function initTileGrid(gridEl) {
@@ -40,7 +39,10 @@ export function addTile(id, label, stream, isLocal) {
   if (isScreen) video.dataset.screen = "";
   tile.appendChild(video);
 
-  tile.addEventListener("click", () => toggleMaximize(id));
+  tile.addEventListener("click", () => {
+    const vid = tile.querySelector("video");
+    if (vid) vid.requestFullscreen();
+  });
   controls.querySelectorAll(".tile-btn").forEach((btn) => {
     const action = btn.dataset.action;
     const handler = btnHandlers[action];
@@ -54,8 +56,7 @@ export function addTile(id, label, stream, isLocal) {
 
   tileMap.set(id, tile);
   grid.appendChild(tile);
-  // Force reflow so CSS Grid recalculates layout for the new tile
-  if (!maximizedId) void grid.offsetHeight;
+  void grid.offsetHeight;
   return tile;
 }
 
@@ -64,9 +65,7 @@ export function removeTile(id) {
   if (!tile) return;
   tile.remove();
   tileMap.delete(id);
-  if (maximizedId === id) maximizedId = null;
-  // Force reflow so remaining tiles recalculate their layout
-  if (grid && !maximizedId) void grid.offsetHeight;
+  if (grid) void grid.offsetHeight;
 }
 
 export function hideTile(id) {
@@ -77,26 +76,6 @@ export function hideTile(id) {
 export function showTile(id) {
   const tile = tileMap.get(id);
   if (tile) tile.style.display = "";
-}
-
-export function toggleMaximize(id) {
-  if (maximizedId === id) {
-    maximizedId = null;
-    tileMap.forEach((t) => {
-      t.style.display = "";
-      t.classList.remove("maximized");
-    });
-  } else {
-    maximizedId = id;
-    tileMap.forEach((t, tid) => {
-      if (tid === id) {
-        t.style.display = "";
-        t.classList.add("maximized");
-      } else {
-        t.style.display = "none";
-      }
-    });
-  }
 }
 
 export function hasTile(id) {

@@ -510,7 +510,6 @@ textarea {
 
 .video-tile {
   position: relative;
-  aspect-ratio: 16 / 9;
   background: #000;
   border-radius: var(--radius);
   overflow: hidden;
@@ -527,10 +526,6 @@ textarea {
 
 .video-tile video[data-screen] {
   object-fit: contain;
-}
-
-.video-tile.maximized {
-  aspect-ratio: auto;
 }
 
 .tile-controls {
