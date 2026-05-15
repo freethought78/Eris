@@ -91,7 +91,7 @@ export async function acceptRoomAnswer(pc, answerSdp) {
   await pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
 }
 
-export function setupRenegotiation(pc, signalDC, { onRemoteTrack } = {}) {
+export function setupRenegotiation(pc, signalDC, { onRemoteTrack, onRemoteTrackEnded } = {}) {
   let makingOffer = false;
 
   pc.addEventListener("negotiationneeded", async () => {
@@ -107,7 +107,12 @@ export function setupRenegotiation(pc, signalDC, { onRemoteTrack } = {}) {
   });
 
   pc.addEventListener("track", (e) => {
-    onRemoteTrack?.(e.streams[0], e.track.kind);
+    const stream = e.streams[0];
+    if (!stream) return;
+    onRemoteTrack?.(stream, e.track.kind);
+    e.track.addEventListener("ended", () => {
+      onRemoteTrackEnded?.(e.track);
+    });
   });
 
   signalDC.addEventListener("message", async (e) => {

@@ -25,7 +25,6 @@ export function addTile(id, label, stream, isLocal) {
   controls.innerHTML = `
     <span class="tile-label">${esc(label)}</span>
     <div class="tile-buttons">
-      <button class="tile-btn" data-action="maximize" title="Maximize">⛶</button>
       <button class="tile-btn" data-action="fullscreen" title="Fullscreen">⛶</button>
       <button class="tile-btn" data-action="popout" title="Pop out">🖼</button>
       <button class="tile-btn" data-action="hide" title="Hide">✕</button>
@@ -55,6 +54,8 @@ export function addTile(id, label, stream, isLocal) {
 
   tileMap.set(id, tile);
   grid.appendChild(tile);
+  // Force reflow so CSS Grid recalculates layout for the new tile
+  if (!maximizedId) void grid.offsetHeight;
   return tile;
 }
 
@@ -64,6 +65,8 @@ export function removeTile(id) {
   tile.remove();
   tileMap.delete(id);
   if (maximizedId === id) maximizedId = null;
+  // Force reflow so remaining tiles recalculate their layout
+  if (grid && !maximizedId) void grid.offsetHeight;
 }
 
 export function hideTile(id) {
@@ -132,12 +135,6 @@ function onDrop(e) {
 // ── Button handlers ──
 
 const btnHandlers = {
-  maximize(id) {
-    toggleMaximize(id);
-    const btn = tileMap.get(id)?.querySelector('[data-action="maximize"]');
-    if (btn) btn.textContent = maximizedId === id ? "⤡" : "⛶";
-  },
-
   fullscreen(_id, tile) {
     const video = tile.querySelector("video");
     if (video) video.requestFullscreen();

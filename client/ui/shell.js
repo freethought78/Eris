@@ -173,14 +173,18 @@ document.addEventListener("eris-connected", (e) => {
   });
 
   // Renegotiation
+  const trackTileMap = new Map();
   setupRenegotiation(pc, signal, {
     onRemoteTrack: (stream) => {
-      if (pendingMediaKind === "screen") {
-        pendingMediaKind = null;
-        addTile("remote-screen", "Screen", stream, false);
-      } else {
-        addTile("remote-cam", "Peer", stream, false);
-      }
+      const isScreen = pendingMediaKind === "screen";
+      const tileId = isScreen ? "remote-screen" : "remote-cam";
+      if (isScreen) pendingMediaKind = null;
+      addTile(tileId, isScreen ? "Screen" : "Peer", stream, false);
+      for (const t of stream.getTracks()) trackTileMap.set(t, tileId);
+    },
+    onRemoteTrackEnded: (track) => {
+      const tileId = trackTileMap.get(track);
+      if (tileId) { removeTile(tileId); trackTileMap.delete(track); }
     },
   });
 
