@@ -48,7 +48,8 @@ export function attachRoomUI(container) {
 
   let ws = null;
   let pc = null;
-  let dc = null;
+  let dcChat = null;
+  let dcFile = null;
 
   const nameInput = container.querySelector("#room-name-input");
   const displayName = () => nameInput.value.trim() || "You";
@@ -64,10 +65,11 @@ export function attachRoomUI(container) {
     statusDiv.className = "status-box" + (className ? " " + className : "");
   }
 
-  function onDataChannel(channel) {
-    dc = channel;
+  function onChannelsOpen({ chat, file }) {
+    dcChat = chat;
+    dcFile = file;
     setStatus("Connected!", "connected");
-    attachChatUI(container, { dc, displayName: displayName() });
+    attachChatUI(container, { dc: chat, dcFile: file, displayName: displayName() });
   }
 
   function sendToServer(obj) {
@@ -111,9 +113,8 @@ export function attachRoomUI(container) {
       if (msg.type === "peer-joined") {
         setStatus("Peer joined! Establishing connection...", "waiting");
         try {
-          const result = await createOffer(onDataChannel);
+          const result = await createOffer(onChannelsOpen);
           pc = result.pc;
-          dc = result.dc;
           sendToServer({ type: "signal", room, data: { type: "offer", sdp: result.sdp } });
           setStatus("Offer sent, waiting for answer...", "waiting");
         } catch (err) {
@@ -128,9 +129,8 @@ export function attachRoomUI(container) {
 
         if (data.type === "offer") {
           try {
-            const result = await createRoomAnswer(data.sdp, onDataChannel);
+            const result = await createRoomAnswer(data.sdp, onChannelsOpen);
             pc = result.pc;
-            dc = result.dc;
             sendToServer({ type: "signal", room, data: { type: "answer", sdp: result.sdp } });
             setStatus("Answer sent, establishing connection...", "waiting");
           } catch (err) {
@@ -166,7 +166,8 @@ export function attachRoomUI(container) {
   function cleanup() {
     if (ws) { ws.onclose = null; ws.close(); ws = null; }
     if (pc) { pc.close(); pc = null; }
-    dc = null;
+    dcChat = null;
+    dcFile = null;
   }
 
   async function handleCreate() {

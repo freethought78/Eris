@@ -7,8 +7,7 @@ const ICE_SERVERS = [
 ];
 
 export function createPeerConnection() {
-  const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-  return pc;
+  return new RTCPeerConnection({ iceServers: ICE_SERVERS });
 }
 
 function waitForIceGathering(pc) {
@@ -25,49 +24,68 @@ function waitForIceGathering(pc) {
   });
 }
 
-export async function createOffer(onDataChannel) {
+function whenBothOpen(dcChat, dcFile, cb) {
+  let c = !dcChat || dcChat.readyState === "open";
+  let f = !dcFile || dcFile.readyState === "open";
+  const check = () => { if (c && f) cb({ chat: dcChat, file: dcFile }); };
+  if (dcChat && dcChat.readyState !== "open") dcChat.addEventListener("open", () => { c = true; check(); });
+  if (dcFile && dcFile.readyState !== "open") dcFile.addEventListener("open", () => { f = true; check(); });
+  check();
+}
+
+export async function createOffer(onChannelsOpen) {
   const pc = createPeerConnection();
-  const dc = pc.createDataChannel("mesh.chat", { ordered: true });
-  dc.addEventListener("open", () => onDataChannel?.(dc));
+  const dcChat = pc.createDataChannel("mesh.chat", { ordered: true });
+  const dcFile = pc.createDataChannel("mesh.file", { ordered: true });
+  whenBothOpen(dcChat, dcFile, onChannelsOpen);
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
   const sdp = await waitForIceGathering(pc);
-  return { pc, dc, sdp };
+  return { pc, dcChat, dcFile, sdp };
 }
 
-export async function createAnswer(offerEncoded, passphrase, onDataChannel) {
+export async function createAnswer(offerEncoded, passphrase, onChannelsOpen) {
   const offerSdp = await decryptSDP(offerEncoded, passphrase);
   const pc = createPeerConnection();
-  let dc = null;
+  let dcChat = null, dcFile = null;
   pc.addEventListener("datachannel", (e) => {
-    dc = e.channel;
-    dc.addEventListener("open", () => onDataChannel?.(dc));
+    if (e.channel.label === "mesh.chat") {
+      dcChat = e.channel;
+      whenBothOpen(dcChat, dcFile, onChannelsOpen);
+    } else if (e.channel.label === "mesh.file") {
+      dcFile = e.channel;
+      whenBothOpen(dcChat, dcFile, onChannelsOpen);
+    }
   });
   await pc.setRemoteDescription({ type: "offer", sdp: offerSdp });
   const answer = await pc.createAnswer();
   await pc.setLocalDescription(answer);
   const sdp = await waitForIceGathering(pc);
-  return { pc, dc, sdp };
+  return { pc, dcChat, dcFile, sdp };
 }
 
 export async function acceptAnswer(pc, answerEncoded, passphrase) {
   const answerSdp = await decryptSDP(answerEncoded, passphrase);
   await pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
-  return pc;
 }
 
-export async function createRoomAnswer(offerSdp, onDataChannel) {
+export async function createRoomAnswer(offerSdp, onChannelsOpen) {
   const pc = createPeerConnection();
-  let dc = null;
+  let dcChat = null, dcFile = null;
   pc.addEventListener("datachannel", (e) => {
-    dc = e.channel;
-    dc.addEventListener("open", () => onDataChannel?.(dc));
+    if (e.channel.label === "mesh.chat") {
+      dcChat = e.channel;
+      whenBothOpen(dcChat, dcFile, onChannelsOpen);
+    } else if (e.channel.label === "mesh.file") {
+      dcFile = e.channel;
+      whenBothOpen(dcChat, dcFile, onChannelsOpen);
+    }
   });
   await pc.setRemoteDescription({ type: "offer", sdp: offerSdp });
   const answer = await pc.createAnswer();
   await pc.setLocalDescription(answer);
   const sdp = await waitForIceGathering(pc);
-  return { pc, dc, sdp };
+  return { pc, dcChat, dcFile, sdp };
 }
 
 export async function acceptRoomAnswer(pc, answerSdp) {

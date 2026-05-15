@@ -45,7 +45,8 @@ export function attachManualUI(container) {
   `;
 
   let pc = null;
-  let dc = null;
+  let dcChat = null;
+  let dcFile = null;
   let pendingAnswerPc = null;
 
   const nameInput = container.querySelector("#manual-name");
@@ -64,9 +65,8 @@ export function attachManualUI(container) {
     btnOffer.disabled = true;
     btnOffer.textContent = "Generating...";
     try {
-      const result = await createOffer(onDataChannel);
+      const result = await createOffer(onChannelsOpen);
       pc = result.pc;
-      dc = result.dc;
       const encrypted = await encryptSDP(result.sdp, passphrase());
       offerText.value = encrypted;
       offerOutput.style.display = "block";
@@ -97,9 +97,8 @@ export function attachManualUI(container) {
     btnAnswer.disabled = true;
     btnAnswer.textContent = "Generating...";
     try {
-      const result = await createAnswer(inputOffer.value.trim(), passphrase(), onDataChannel);
+      const result = await createAnswer(inputOffer.value.trim(), passphrase(), onChannelsOpen);
       pendingAnswerPc = result.pc;
-      dc = result.dc;
       const encrypted = await encryptSDP(result.sdp, passphrase());
       answerText.value = encrypted;
       answerOutput.style.display = "block";
@@ -140,11 +139,12 @@ export function attachManualUI(container) {
     }
   });
 
-  function onDataChannel(channel) {
-    dc = channel;
+  function onChannelsOpen({ chat, file }) {
+    dcChat = chat;
+    dcFile = file;
     statusDiv.style.display = "block";
     statusDiv.textContent = "Connected!";
     statusDiv.className = "connected";
-    attachChatUI(container, { dc, displayName: displayName() });
+    attachChatUI(container, { dc: chat, dcFile: file, displayName: displayName() });
   }
 }
