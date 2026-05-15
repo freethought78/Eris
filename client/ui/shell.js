@@ -26,7 +26,7 @@ app.innerHTML = `
     </div>
 
     <footer id="toolbar">
-      <button id="btn-mic" class="toolbar-btn" disabled title="Microphone">🎤</button>
+      <button id="btn-mic" class="toolbar-btn" disabled title="Voice Call">📞</button>
       <button id="btn-cam" class="toolbar-btn" disabled title="Camera">📷</button>
       <button id="btn-screen" class="toolbar-btn" disabled title="Share screen">📺</button>
       <button id="btn-file" class="toolbar-btn" disabled title="Send file">📎</button>
@@ -195,6 +195,18 @@ document.addEventListener("eris-connected", (e) => {
   signal.send(JSON.stringify({ type: "peer-info", name: displayName }));
 
   // Call flow
+  const cleanupCall = () => {
+    if (localStream?.getAudioTracks().length) {
+      removeMediaFromPC(activePC, localStream, "audio");
+      if (!localStream.getTracks().length) {
+        stopStream(localStream);
+        localStream = null;
+        removeTile("local-cam");
+      }
+    }
+    btnMic.classList.remove("active", "muted");
+  };
+
   initCall(signal, "Peer", {
     onCallAccepted: async () => {
       try {
@@ -208,21 +220,21 @@ document.addEventListener("eris-connected", (e) => {
         if (localStream.getVideoTracks().length && !hasTile("local-cam")) {
           addTile("local-cam", "You", localStream, true);
         }
-      } catch (err) {
-        alert("Failed to start mic: " + err.message);
+      } catch {
+        // No mic — proceed listen-only; button stays inactive
       }
     },
-    onCallEnded: () => {
-      if (localStream?.getAudioTracks().length) {
-        removeMediaFromPC(activePC, localStream, "audio");
-        if (!localStream.getTracks().length) {
-          stopStream(localStream);
-          localStream = null;
-          removeTile("local-cam");
-        }
+    onCallEnded: cleanupCall,
+  });
+
+  // Detect peer disconnect to end call
+  pc.addEventListener("connectionstatechange", () => {
+    if (["disconnected", "failed", "closed"].includes(pc.connectionState)) {
+      if (getCallState() === "connected") {
+        cleanupCall();
+        resetCallState();
       }
-      btnMic.classList.remove("active");
-    },
+    }
   });
 
   signal.addEventListener("message", (e) => {
@@ -234,6 +246,14 @@ document.addEventListener("eris-connected", (e) => {
       removeTile("remote-screen");
     }
   });
+
+  // Best-effort call-end notification on page unload
+  const handleUnload = () => {
+    if (getCallState() === "connected") {
+      activeSignalDC?.send(JSON.stringify({ type: "call-ended", kind: "audio" }));
+    }
+  };
+  window.addEventListener("beforeunload", handleUnload);
 
   document.getElementById("btn-mic").disabled = false;
   document.getElementById("btn-cam").disabled = false;
@@ -260,10 +280,30 @@ async function toggleMic() {
     requestCall("audio");
   } else if (s === "calling") {
     cancelCall();
-    btnMic.classList.remove("active");
+    btnMic.classList.remove("active", "muted");
   } else if (s === "connected") {
-    endCall("audio");
-    btnMic.classList.remove("active");
+    const audioTracks = localStream?.getAudioTracks();
+    if (!audioTracks?.length) {
+      // Listen-only mode — try to add mic now
+      try {
+        const ms = await getStream({ audio: true, video: false });
+        if (!localStream) localStream = ms;
+        else for (const t of ms.getAudioTracks()) localStream.addTrack(t);
+        addMediaToPC(activePC, localStream);
+        btnMic.classList.add("active");
+        btnMic.classList.remove("muted");
+      } catch {}
+    } else if (audioTracks.some((t) => t.enabled)) {
+      // Mute
+      for (const t of audioTracks) t.enabled = false;
+      btnMic.classList.remove("active");
+      btnMic.classList.add("muted");
+    } else {
+      // Unmute
+      for (const t of audioTracks) t.enabled = true;
+      btnMic.classList.remove("muted");
+      btnMic.classList.add("active");
+    }
   }
   // s === "ringing" — overlay handles it; button does nothing
 }

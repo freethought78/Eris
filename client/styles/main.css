@@ -146,6 +146,12 @@ html, body {
   border-color: #2d6a4f;
 }
 
+.toolbar-btn.muted {
+  background: #6f2d2d;
+  border-color: #6f2d2d;
+  opacity: 0.8;
+}
+
 #peer-list { list-style: none; }
 
 /* ── Menu Panel ── */
