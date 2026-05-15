@@ -14,7 +14,6 @@ app.innerHTML = `
     <header id="topbar">
       <button id="menu-btn" aria-label="Menu">&#9776;</button>
       <h1>Mesh</h1>
-      <span id="peer-count">peers: 0</span>
     </header>
     <div id="body">
       <aside id="sidebar">
