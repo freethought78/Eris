@@ -86,6 +86,16 @@ wss.on("connection", (ws) => {
   });
 });
 
+server.on("error", (err) => {
+  if (err.code === "EADDRINUSE") {
+    console.error(`Port ${PORT} is already in use. Is another Mesh server running?`);
+    process.exitCode = 1;
+  } else {
+    console.error("Server error:", err.message);
+    process.exitCode = 1;
+  }
+});
+
 server.listen(PORT, HOST, () => {
   const local = `http://localhost:${PORT}`;
   const lan = getLanIP(PORT);

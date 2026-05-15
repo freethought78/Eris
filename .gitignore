@@ -2,3 +2,4 @@ node_modules/
 bundle/mesh.zip
 client/mesh.zip
 .server-*.txt
+.test-*.txt
