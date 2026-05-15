@@ -1,0 +1,100 @@
+:root {
+  --bg: #1a1a2e;
+  --surface: #16213e;
+  --text: #e0e0e0;
+  --accent: #0f3460;
+  --highlight: #e94560;
+  --border: #2a2a4a;
+  --radius: 6px;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+}
+
+#app {
+  height: 100%;
+}
+
+#layout {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+#topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+#topbar h1 {
+  flex: 1;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+#menu-btn {
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 20px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: var(--radius);
+}
+
+#menu-btn:hover {
+  background: var(--accent);
+}
+
+#body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+#sidebar {
+  width: 200px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  padding: 8px;
+  overflow-y: auto;
+}
+
+#content {
+  flex: 1;
+  padding: 16px;
+  overflow-y: auto;
+}
+
+#welcome {
+  color: #888;
+  margin-top: 40px;
+  text-align: center;
+}
+
+#toolbar {
+  padding: 8px 16px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: #888;
+}
+
+#peer-list {
+  list-style: none;
+}

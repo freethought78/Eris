@@ -1,0 +1,8 @@
+{
+  "name": "mesh-server",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "ws": "^8.16.0"
+  }
+}
