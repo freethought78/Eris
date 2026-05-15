@@ -13,14 +13,14 @@ app.innerHTML = `
   <div id="layout">
     <header id="topbar">
       <button id="menu-btn" aria-label="Menu">&#9776;</button>
-      <h1>Mesh</h1>
+      <h1>Eris</h1>
     </header>
     <div id="body">
       <aside id="sidebar">
         <ul id="peer-list"></ul>
       </aside>
       <main id="content">
-        <p id="welcome">Welcome to Mesh. Open the menu to connect.</p>
+        <p id="welcome">Welcome to Eris. Open the menu to connect.</p>
       </main>
     </div>
 
@@ -113,7 +113,7 @@ let localStream = null;
 let screenStream = null;
 let pendingMediaKind = null;
 
-document.addEventListener("mesh-connected", (e) => {
+document.addEventListener("eris-connected", (e) => {
   const { pc, chat, file, signal, displayName } = e.detail;
   activePC = pc;
   activeSignalDC = signal;

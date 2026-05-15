@@ -1,11 +1,11 @@
-# Mesh — Design Document
+# Eris — Design Document
 ### A decentralized, self-replicating, encrypted peer-to-peer communication framework
 
 ---
 
 ## 1. Project Philosophy
 
-Mesh is a browser-based communication platform with no persistent server, no stored user data, and no central authority. Every instance of Mesh — whether hosted on a private server or opened as a local HTML file — is a fully functional node. The software propagates through its own use: every instance offers a download of the complete package, including the lightweight server stack needed to host a new instance.
+Eris is a browser-based communication platform with no persistent server, no stored user data, and no central authority. Every instance of Eris — whether hosted on a private server or opened as a local HTML file — is a fully functional node. The software propagates through its own use: every instance offers a download of the complete package, including the lightweight server stack needed to host a new instance.
 
 Core principles:
 - **The server does as little as possible.** It serves files and brokers temporary WebRTC handshakes. It never stores messages, files, user data, or session history.
@@ -37,7 +37,7 @@ Core principles:
 │     SERVER (minimal) │
 │                      │
 │  - Serves /client    │
-│  - Serves /download  │
+│  - Serves /download/eris.zip  │
 │  - Ephemeral rooms   │
 │    (SDP relay only)  │
 │  - Zero persistence  │
@@ -51,7 +51,7 @@ After handshake completion, all communication flows exclusively over WebRTC Data
 ## 3. Repository Structure
 
 ```
-mesh/
+eris/
 ├── server/
 │   ├── index.js          # Main server entry point (Node.js, no frameworks)
 │   ├── rooms.js          # Ephemeral room state manager
@@ -63,7 +63,7 @@ mesh/
 │   ├── app.js            # Main application bootstrap
 │   ├── webrtc/
 │   │   ├── peer.js       # RTCPeerConnection wrapper, SDP generation/parsing
-│   │   ├── mesh.js       # Multi-peer mesh manager (handles N-party connections)
+│   │   ├── eris.js       # Multi-peer mesh manager (handles N-party connections)
 │   │   └── crypto.js     # SDP encryption/decryption, key derivation
 │   ├── channels/
 │   │   ├── text.js       # Text messaging over DataChannel
@@ -81,9 +81,9 @@ mesh/
 │       └── main.css      # All styles; CSS variables for theming
 │
 ├── bundle/               # Output directory for the distributable zip
-│   └── mesh.zip          # Auto-generated: full client + server package
+│   └── eris.zip          # Auto-generated: full client + server package
 │
-└── build.js              # Packages client + server into mesh.zip for download
+└── build.js              # Packages client + server into eris.zip for download
 ```
 
 ---
@@ -97,7 +97,7 @@ The server is a single Node.js file with minimal dependencies. It must remain sm
 **What the server does:**
 
 1. Serves all files in `/client/` as static assets, with correct MIME types.
-2. Serves `/download/mesh.zip` — the full bundled package — at a well-known URL.
+2. Serves `/download/eris.zip` — the full bundled package — at a well-known URL.
 3. Opens a WebSocket endpoint at `/signal` for room-based SDP brokering.
 4. Maintains an in-memory rooms object (plain JS object, never written to disk).
 
@@ -192,11 +192,11 @@ SDP strings contain metadata (IP addresses, codec details) that some users may n
 
 All crypto uses the browser's native `window.crypto.subtle` API. No third-party crypto libraries.
 
-### 5.5 Multi-party Mesh
+### 5.5 Multi-party Mesh (Eris)
 
 WebRTC is natively 1:1. Multi-party is implemented as a full mesh — each participant holds a direct `RTCPeerConnection` to every other participant.
 
-`mesh.js` manages:
+`eris.js` manages:
 - A Map of `peerId → RTCPeerConnection`.
 - Automatic offer generation when a new peer is introduced (via room broadcast or manual introduction).
 - Graceful removal of a peer from the map when their connection closes.
@@ -212,16 +212,16 @@ Every peer connection opens multiple named DataChannels for different traffic ty
 
 | Channel name | Purpose | Ordered | Max retransmits |
 |---|---|---|---|
-| `mesh.chat` | Text messages | yes | unlimited |
-| `mesh.file` | File transfer chunks | yes | unlimited |
-| `mesh.signal` | Internal mesh signaling (peer introductions) | yes | unlimited |
-| `mesh.state` | Application state sync (for future app layer) | yes | unlimited |
+| `eris.chat` | Text messages | yes | unlimited |
+| `eris.file` | File transfer chunks | yes | unlimited |
+| `eris.signal` | Internal mesh signaling (peer introductions) | yes | unlimited |
+| `eris.state` | Application state sync (for future app layer) | yes | unlimited |
 
 Each channel is opened by the connection initiator. Both sides listen for `ondatachannel` to receive channels opened by remote peers.
 
 ### 6.1 File Transfer Protocol
 
-Files are chunked at 64KB per chunk and sent over `mesh.file` with a simple envelope:
+Files are chunked at 64KB per chunk and sent over `eris.file` with a simple envelope:
 
 ```json
 { "id": "uuid", "name": "filename.ext", "size": 1048576, "chunk": 3, "total": 16, "data": "base64..." }
@@ -273,7 +273,7 @@ The interface is a single-page application with no framework dependency. Vanilla
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│ [≡ Menu]                    Mesh          [peers: 2] │
+│ [≡ Menu]                    Eris          [peers: 2] │
 ├──────────────┬──────────────────────────────────────┤
 │              │                                       │
 │  Peer List   │         Main Content Area             │
@@ -292,7 +292,7 @@ The hamburger/menu button opens a slide-out panel containing:
 - Connect (opens connection modal — Path A or Path B choice)
 - Settings (STUN server config, display name, theme)
 - About (project description, source link)
-- **Download** (download mesh.zip — always present, always functional)
+- **Download** (download eris.zip — always present, always functional)
 
 The Download option is the self-replication mechanism. It is present but not prominently advertised in the main UI — it lives in the menu, accessible but not intrusive.
 
@@ -315,8 +315,8 @@ On open, presents two clearly labeled options:
 ### 9.4 Download Behavior
 
 `download.js` detects whether the client is running:
-- **From a server:** The download link points to `/download/mesh.zip` on that server.
-- **From local filesystem:** The download link points to a pre-bundled `mesh.zip` that is included alongside `index.html` in the distributable package.
+- **From a server:** The download link points to `/download/eris.zip` on that server.
+- **From local filesystem:** The download link points to a pre-bundled `eris.zip` that is included alongside `index.html` in the distributable package.
 
 In both cases, a download is always available.
 
@@ -326,14 +326,14 @@ In both cases, a download is always available.
 
 `build.js` is a Node.js script (no external dependencies) that:
 1. Copies `/client/` and `/server/` into a temp directory.
-2. Zips the temp directory into `/bundle/mesh.zip`.
-3. Copies `mesh.zip` into `/client/` so it is served by the static file server.
+2. Zips the temp directory into `/bundle/eris.zip`.
+3. Copies `eris.zip` into `/client/` so it is served by the static file server.
 
-This script runs as part of deployment. The distributable package (`mesh.zip`) therefore always contains the server stack, the client, and a copy of itself.
+This script runs as part of deployment. The distributable package (`eris.zip`) therefore always contains the server stack, the client, and a copy of itself.
 
 **The self-replication chain:**
 ```
-Alice hosts an instance → Bob downloads mesh.zip from Alice's instance
+Alice hosts an instance → Bob downloads eris.zip from Alice's instance
 → Bob hosts his own instance → Carol downloads from Bob's instance → ...
 ```
 
@@ -347,7 +347,7 @@ Alice hosts an instance → Bob downloads mesh.zip from Alice's instance
 | Server WebSocket | `ws` package | Single dependency, tiny, well-maintained |
 | Server HTTP | Node built-in `http` | No Express needed for this scope |
 | Client JS | Vanilla ES modules | No framework overhead, works without bundler |
-| Client 3D (future) | Three.js (CDN) | Not needed for v1; DataChannel `mesh.state` is ready for it |
+| Client 3D (future) | Three.js (CDN) | Not needed for v1; DataChannel `eris.state` is ready for it |
 | Client crypto | `window.crypto.subtle` | Native, no library needed |
 | Client build | esbuild (optional) | Single-file bundle for offline use |
 | Styling | Vanilla CSS with variables | No preprocessor needed |
@@ -360,12 +360,12 @@ Alice hosts an instance → Bob downloads mesh.zip from Alice's instance
 ### Phase 1 — Skeleton
 - Server: static file serving + WebSocket endpoint listening
 - Client: index.html loads, ES modules resolve, no errors in console
-- Download link present and functional (serves mesh.zip)
+- Download link present and functional (serves eris.zip)
 
 ### Phase 2 — Manual P2P Connection
 - `peer.js`: create offer, encrypt, display as string
 - `peer.js`: accept answer string, decrypt, establish connection
-- `mesh.chat` DataChannel opens and sends/receives a test message
+- `eris.chat` DataChannel opens and sends/receives a test message
 - Two browser tabs can connect to each other using copy-paste
 
 ### Phase 3 — Room System
@@ -374,12 +374,12 @@ Alice hosts an instance → Bob downloads mesh.zip from Alice's instance
 - Same DataChannel test as Phase 2 but without manual string exchange
 
 ### Phase 4 — Text Chat
-- `text.js`: full chat UI over `mesh.chat` DataChannel
+- `text.js`: full chat UI over `eris.chat` DataChannel
 - Message history in memory (cleared on disconnect)
 - Display names, timestamps
 
 ### Phase 5 — File Transfer
-- `file.js`: chunked send/receive over `mesh.file`
+- `file.js`: chunked send/receive over `eris.file`
 - Progress indicator
 - Receive and offer download of completed file
 
@@ -391,8 +391,8 @@ Alice hosts an instance → Bob downloads mesh.zip from Alice's instance
 - `screen.js`: getDisplayMedia, displayed as a named video tile
 
 ### Phase 8 — Multi-party
-- `mesh.js`: manage multiple RTCPeerConnections
-- Peer introduction via `mesh.signal` DataChannel
+- `eris.js`: manage multiple RTCPeerConnections
+- Peer introduction via `eris.signal` DataChannel
 - Peer list UI with connection status
 
 ### Phase 9 — Polish
@@ -411,7 +411,7 @@ Alice hosts an instance → Bob downloads mesh.zip from Alice's instance
 - **No persistence.** Chat history, transferred files, and connection state exist only in memory for the duration of the session. This is a feature, not a bug.
 - **No accounts.** Display names are set per-session and are not verified. There is no identity layer.
 - **No end-to-end encryption beyond WebRTC's native DTLS/SRTP.** All DataChannel and media traffic is encrypted in transit by the protocol. There is no additional application-layer encryption on messages after the connection is established. This is intentional — adding it would require a key exchange protocol that adds significant complexity with marginal gain over DTLS for this use case.
-- **Mesh video does not scale beyond ~6-8 participants.** This is a fundamental WebRTC full-mesh limitation and is not solvable without an SFU, which would require a real server. The UI warns but does not block.
+- **Eris video does not scale beyond ~6-8 participants.** This is a fundamental WebRTC full-mesh limitation and is not solvable without an SFU, which would require a real server. The UI warns but does not block.
 - **Renegotiation in Path B requires manual re-exchange of SDP.** Adding media after connection is established requires both users to repeat the SDP exchange. This is documented and explained in the UI.
 
 ---

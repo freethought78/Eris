@@ -1,7 +1,7 @@
 @echo off
-title Mesh Server
+title Eris Server
 echo ============================================
-echo  Mesh - Peer-to-Peer Communication Platform
+echo  Eris - Peer-to-Peer Communication Platform
 echo ============================================
 echo.
 

@@ -1,5 +1,5 @@
 {
-  "name": "mesh-server",
+  "name": "eris-server",
   "type": "module",
   "private": true,
   "dependencies": {

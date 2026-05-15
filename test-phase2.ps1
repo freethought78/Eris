@@ -2,7 +2,7 @@ param(
     [int]$Port = 8080
 )
 
-$Root = "C:\Desktop\mesh"
+$Root = "C:\repos\Eris"
 $TestOut = Join-Path $Root ".phase2-test-out.txt"
 $TestErr = Join-Path $Root ".phase2-test-err.txt"
 $passed = 0
@@ -79,7 +79,7 @@ try {
     Test-Step "GET /webrtc/peer.js" { (Invoke-WebRequest -Uri "http://localhost:$Port/webrtc/peer.js" -UseBasicParsing -TimeoutSec 5).StatusCode -eq 200 }
     Test-Step "GET /webrtc/crypto.js" { (Invoke-WebRequest -Uri "http://localhost:$Port/webrtc/crypto.js" -UseBasicParsing -TimeoutSec 5).StatusCode -eq 200 }
     Test-Step "GET /styles/main.css" { (Invoke-WebRequest -Uri "http://localhost:$Port/styles/main.css" -UseBasicParsing -TimeoutSec 5).StatusCode -eq 200 }
-    Test-Step "GET /download/mesh.zip" { (Invoke-WebRequest -Uri "http://localhost:$Port/download/mesh.zip" -UseBasicParsing -TimeoutSec 5).StatusCode -eq 200 }
+    Test-Step "GET /download/eris.zip" { (Invoke-WebRequest -Uri "http://localhost:$Port/download/eris.zip" -UseBasicParsing -TimeoutSec 5).StatusCode -eq 200 }
     Test-Step "GET /nonexistent (404)" { try { Invoke-WebRequest -Uri "http://localhost:$Port/nonexistent.js" -UseBasicParsing -TimeoutSec 5; $false } catch { $_.Exception.Response.StatusCode -eq 404 } }
 
     Test-Step "MIME text/html" {

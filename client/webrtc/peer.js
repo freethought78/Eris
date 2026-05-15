@@ -39,9 +39,9 @@ function whenAllOpen(dcs, cb) {
 
 export async function createOffer(onChannelsOpen) {
   const pc = createPeerConnection();
-  const dcChat = pc.createDataChannel("mesh.chat", { ordered: true });
-  const dcFile = pc.createDataChannel("mesh.file", { ordered: true });
-  const dcSignal = pc.createDataChannel("mesh.signal", { ordered: true });
+  const dcChat = pc.createDataChannel("eris.chat", { ordered: true });
+  const dcFile = pc.createDataChannel("eris.file", { ordered: true });
+  const dcSignal = pc.createDataChannel("eris.signal", { ordered: true });
   whenAllOpen({ chat: dcChat, file: dcFile, signal: dcSignal }, onChannelsOpen);
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
@@ -53,7 +53,7 @@ export async function createAnswer(offerEncoded, passphrase, onChannelsOpen) {
   const offerSdp = await decryptSDP(offerEncoded, passphrase);
   const pc = createPeerConnection();
   const dcs = {};
-  const dcLabelMap = { "mesh.chat": "chat", "mesh.file": "file", "mesh.signal": "signal" };
+  const dcLabelMap = { "eris.chat": "chat", "eris.file": "file", "eris.signal": "signal" };
   pc.addEventListener("datachannel", (e) => {
     const key = dcLabelMap[e.channel.label];
     if (key) dcs[key] = e.channel;
@@ -74,7 +74,7 @@ export async function acceptAnswer(pc, answerEncoded, passphrase) {
 export async function createRoomAnswer(offerSdp, onChannelsOpen) {
   const pc = createPeerConnection();
   const dcs = {};
-  const dcLabelMap = { "mesh.chat": "chat", "mesh.file": "file", "mesh.signal": "signal" };
+  const dcLabelMap = { "eris.chat": "chat", "eris.file": "file", "eris.signal": "signal" };
   pc.addEventListener("datachannel", (e) => {
     const key = dcLabelMap[e.channel.label];
     if (key) dcs[key] = e.channel;

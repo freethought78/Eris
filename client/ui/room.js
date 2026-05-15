@@ -14,7 +14,7 @@ async function sha256(str) {
 export function attachRoomUI(container) {
   container.innerHTML = `
     <h2>Room Connection</h2>
-    <p class="help-text">Requires a Mesh server running on your network.</p>
+    <p class="help-text">Requires a Eris server running on your network.</p>
 
     <label class="field">
       <span>Display name</span>
@@ -68,7 +68,7 @@ export function attachRoomUI(container) {
     dcChat = chat;
     dcFile = file;
     setStatus("Connected!", "connected");
-    document.dispatchEvent(new CustomEvent("mesh-connected", {
+    document.dispatchEvent(new CustomEvent("eris-connected", {
       detail: { pc, chat, file, signal, displayName: displayName() },
     }));
   }

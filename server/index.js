@@ -30,14 +30,14 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
   // Download route
-  if (url.pathname === "/download/mesh.zip") {
-    const zipPath = path.join(CLIENT_DIR, "mesh.zip");
+  if (url.pathname === "/download/eris.zip") {
+    const zipPath = path.join(CLIENT_DIR, "eris.zip");
     if (!fs.existsSync(zipPath)) {
       res.writeHead(404);
-      res.end("mesh.zip not found. Run build.js first.");
+      res.end("eris.zip not found. Run build.js first.");
       return;
     }
-    res.writeHead(200, { "Content-Type": "application/zip", "Content-Disposition": 'attachment; filename="mesh.zip"' });
+    res.writeHead(200, { "Content-Type": "application/zip", "Content-Disposition": 'attachment; filename="eris.zip"' });
     fs.createReadStream(zipPath).pipe(res);
     return;
   }
@@ -108,7 +108,7 @@ wss.on("connection", (ws) => {
 
 server.on("error", (err) => {
   if (err.code === "EADDRINUSE") {
-    console.error(`Port ${PORT} is already in use. Is another Mesh server running?`);
+    console.error(`Port ${PORT} is already in use. Is another Eris server running?`);
     process.exitCode = 1;
   } else {
     console.error("Server error:", err.message);
@@ -119,7 +119,7 @@ server.on("error", (err) => {
 server.listen(PORT, HOST, () => {
   const local = `http://localhost:${PORT}`;
   const lan = getLanIP(PORT);
-  console.log(`Mesh server running at ${local}`);
+  console.log(`Eris server running at ${local}`);
   if (lan) console.log(`LAN: ${lan}`);
 });
 

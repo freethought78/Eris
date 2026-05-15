@@ -6,13 +6,13 @@ const ROOT = path.resolve(import.meta.dirname);
 const CLIENT_DIR = path.join(ROOT, "client");
 const SERVER_DIR = path.join(ROOT, "server");
 const BUNDLE_DIR = path.join(ROOT, "bundle");
-const OUT_ZIP = path.join(BUNDLE_DIR, "mesh.zip");
+const OUT_ZIP = path.join(BUNDLE_DIR, "eris.zip");
 
 if (!fs.existsSync(BUNDLE_DIR)) fs.mkdirSync(BUNDLE_DIR, { recursive: true });
 
 // Build a simple zip using the archiver pattern with Node built-ins.
 // For a zero-dep build, we collect all files, then write them into a single temp dir.
-const tmp = fs.mkdtempSync(path.join(ROOT, ".mesh-build-"));
+const tmp = fs.mkdtempSync(path.join(ROOT, ".eris-build-"));
 try {
   // Copy launcher scripts into the zip root
   for (const launcher of ["start-server.bat", "start-server.sh"]) {
@@ -23,11 +23,11 @@ try {
   copyDir(CLIENT_DIR, path.join(tmp, "client"));
   // Copy server/ (exclude node_modules)
   copyDir(SERVER_DIR, path.join(tmp, "server"), (name) => name !== "node_modules");
-  // Zip tmp into bundle/mesh.zip
+  // Zip tmp into bundle/eris.zip
   await zipDir(tmp, OUT_ZIP);
   // Also copy into client/ for the download route
-  fs.copyFileSync(OUT_ZIP, path.join(CLIENT_DIR, "mesh.zip"));
-  console.log("Built bundle/mesh.zip and client/mesh.zip");
+  fs.copyFileSync(OUT_ZIP, path.join(CLIENT_DIR, "eris.zip"));
+  console.log("Built bundle/eris.zip and client/eris.zip");
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
 }

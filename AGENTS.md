@@ -1,4 +1,4 @@
-# Mesh — Agent Guide
+# Eris — Agent Guide
 
 ## State of the repo
 
@@ -9,7 +9,7 @@ This is a **design-stage repo**: `DESIGN.md` is the single source of truth. No c
 - **Server:** Node.js, no frameworks, depends only on `ws` (WebSocket) and Node built-in `http`/`fs`.
 - **Client:** Vanilla ES modules (no bundler needed for dev), `window.crypto.subtle` for SDP encryption.
 - **No test framework, no lint/typecheck config** — these are not yet in place.
-- **`build.js`** (Node script, no deps) zips `client/` + `server/` into `bundle/mesh.zip`.
+- **`build.js`** (Node script, no deps) zips `client/` + `server/` into `bundle/eris.zip`.
 - **Dev workflow:** open `client/index.html` locally or serve via `node server/index.js [--port 8080]`.
 
 ## Critical facts

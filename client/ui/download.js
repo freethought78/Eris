@@ -1,5 +1,5 @@
 const isLocal = window.location.protocol === "file:";
-const downloadUrl = isLocal ? "mesh.zip" : "/download/mesh.zip";
+const downloadUrl = isLocal ? "eris.zip" : "/download/eris.zip";
 
 // Insert download link into the menu when it exists
 const observer = new MutationObserver(() => {

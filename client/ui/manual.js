@@ -144,7 +144,7 @@ export function attachManualUI(container) {
     statusDiv.style.display = "block";
     statusDiv.textContent = "Connected!";
     statusDiv.className = "connected";
-    document.dispatchEvent(new CustomEvent("mesh-connected", {
+    document.dispatchEvent(new CustomEvent("eris-connected", {
       detail: { pc, chat, file, signal, displayName: displayName() },
     }));
   }

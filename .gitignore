@@ -1,5 +1,5 @@
 node_modules/
-bundle/mesh.zip
-client/mesh.zip
+bundle/eris.zip
+client/eris.zip
 .server-*.txt
 .test-*.txt
