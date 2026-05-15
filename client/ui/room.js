@@ -1,4 +1,5 @@
 import { createOffer, createRoomAnswer, acceptRoomAnswer } from "../webrtc/peer.js";
+import { attachChatUI } from "./chat.js";
 
 const isLocal = window.location.protocol === "file:";
 
@@ -14,7 +15,12 @@ async function sha256(str) {
 export function attachRoomUI(container) {
   container.innerHTML = `
     <h2>Room Connection</h2>
-    <p class="help-text"> Requires a Mesh server running on your network. </p>
+    <p class="help-text">Requires a Mesh server running on your network.</p>
+
+    <label class="field">
+      <span>Display name</span>
+      <input type="text" id="room-name-input" placeholder="Alice">
+    </label>
 
     <label class="field">
       <span>Server address</span>
@@ -24,7 +30,7 @@ export function attachRoomUI(container) {
 
     <label class="field">
       <span>Room name</span>
-      <input type="text" id="room-name" placeholder="my-room">
+      <input type="text" id="room-room" placeholder="my-room">
     </label>
 
     <label class="field">
@@ -38,18 +44,17 @@ export function attachRoomUI(container) {
     </div>
 
     <div id="room-status" class="status-box" style="display:none"></div>
-    <div id="chat-log" style="display:none">
-      <h3>Messages</h3>
-      <div id="messages"></div>
-    </div>
   `;
 
   let ws = null;
   let pc = null;
   let dc = null;
 
+  const nameInput = container.querySelector("#room-name-input");
+  const displayName = () => nameInput.value.trim() || "You";
+
   const serverInput = container.querySelector("#room-server");
-  const nameInput = container.querySelector("#room-name");
+  const roomInput = container.querySelector("#room-room");
   const passInput = container.querySelector("#room-password");
   const statusDiv = container.querySelector("#room-status");
 
@@ -59,21 +64,10 @@ export function attachRoomUI(container) {
     statusDiv.className = "status-box" + (className ? " " + className : "");
   }
 
-  function addMessage(from, text) {
-    const log = container.querySelector("#chat-log");
-    const msgs = container.querySelector("#messages");
-    log.style.display = "block";
-    const div = document.createElement("div");
-    div.className = "msg";
-    div.innerHTML = `<strong>${escapeHtml(from)}:</strong> ${escapeHtml(text)}`;
-    msgs.appendChild(div);
-  }
-
   function onDataChannel(channel) {
     dc = channel;
     setStatus("Connected!", "connected");
-    dc.addEventListener("message", (e) => addMessage("Peer", e.data));
-    dc.send("hello — DataChannel is alive");
+    attachChatUI(container, { dc, displayName: displayName() });
   }
 
   function sendToServer(obj) {
@@ -145,7 +139,6 @@ export function attachRoomUI(container) {
         } else if (data.type === "answer") {
           try {
             await acceptRoomAnswer(pc, data.sdp);
-            // Connection will establish once ICE completes
           } catch (err) {
             setStatus("Failed to accept answer: " + err.message, "error");
           }
@@ -178,7 +171,7 @@ export function attachRoomUI(container) {
 
   async function handleCreate() {
     const server = serverInput.value.trim();
-    const name = nameInput.value.trim();
+    const name = roomInput.value.trim();
     const pass = passInput.value;
     if (!server) { setStatus("Enter a server address", "error"); return; }
     if (!name) { setStatus("Enter a room name", "error"); return; }
@@ -189,7 +182,7 @@ export function attachRoomUI(container) {
 
   async function handleJoin() {
     const server = serverInput.value.trim();
-    const name = nameInput.value.trim();
+    const name = roomInput.value.trim();
     const pass = passInput.value;
     if (!server) { setStatus("Enter a server address", "error"); return; }
     if (!name) { setStatus("Enter a room name", "error"); return; }
@@ -200,10 +193,4 @@ export function attachRoomUI(container) {
 
   container.querySelector("#btn-create-room").addEventListener("click", handleCreate);
   container.querySelector("#btn-join-room").addEventListener("click", handleJoin);
-}
-
-function escapeHtml(s) {
-  const d = document.createElement("div");
-  d.textContent = s;
-  return d.innerHTML;
 }

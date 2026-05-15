@@ -1,9 +1,15 @@
 import { createOffer, createAnswer, acceptAnswer, encryptSDP, decryptSDP } from "../webrtc/peer.js";
+import { attachChatUI } from "./chat.js";
 
 export function attachManualUI(container) {
   container.innerHTML = `
     <h2>Manual Connection</h2>
     <p class="help-text">No server needed. Share a code with your contact.</p>
+
+    <label class="field">
+      <span>Display name</span>
+      <input type="text" id="manual-name" placeholder="Alice">
+    </label>
 
     <label class="field">
       <span>Passphrase (optional — used for SDP encryption)</span>
@@ -36,15 +42,14 @@ export function attachManualUI(container) {
     </fieldset>
 
     <div id="connection-status" style="display:none"></div>
-    <div id="chat-log" style="display:none">
-      <h3>Messages</h3>
-      <div id="messages"></div>
-    </div>
   `;
 
   let pc = null;
   let dc = null;
   let pendingAnswerPc = null;
+
+  const nameInput = container.querySelector("#manual-name");
+  const displayName = () => nameInput.value.trim() || "You";
 
   const passphraseInput = container.querySelector("#manual-passphrase");
   const passphrase = () => passphraseInput.value || "";
@@ -140,27 +145,6 @@ export function attachManualUI(container) {
     statusDiv.style.display = "block";
     statusDiv.textContent = "Connected!";
     statusDiv.className = "connected";
-
-    dc.addEventListener("message", (e) => {
-      addMessage("Peer", e.data);
-    });
-
-    dc.send("hello — DataChannel is alive");
+    attachChatUI(container, { dc, displayName: displayName() });
   }
-
-  function addMessage(from, text) {
-    const log = container.querySelector("#chat-log");
-    const msgs = container.querySelector("#messages");
-    log.style.display = "block";
-    const div = document.createElement("div");
-    div.className = "msg";
-    div.innerHTML = `<strong>${from}:</strong> ${escapeHtml(text)}`;
-    msgs.appendChild(div);
-  }
-}
-
-function escapeHtml(s) {
-  const d = document.createElement("div");
-  d.textContent = s;
-  return d.innerHTML;
 }

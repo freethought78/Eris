@@ -288,28 +288,82 @@ textarea {
   color: #95d5b2;
 }
 
-/* ── Chat log ── */
+/* ── Connection status ── */
 
-#chat-log {
+#connection-status, .status-box {
+  padding: 12px;
+  border-radius: var(--radius);
+  margin-top: 12px;
+  text-align: center;
+}
+
+#connection-status.connected, .status-box.connected {
+  background: #1b4332;
+  border: 1px solid #2d6a4f;
+  color: #95d5b2;
+}
+
+.status-box.error { background: #3b1a1a; border: 1px solid #6f2d2d; color: #d59595; }
+.status-box.waiting { background: #1a2a3b; border: 1px solid #2d4a6f; color: #95b5d5; }
+
+/* ── Chat UI ── */
+
+#chat-ui {
   margin-top: 16px;
   border-top: 1px solid var(--border);
   padding-top: 12px;
 }
 
-#chat-log h3 { font-size: 14px; margin-bottom: 8px; }
-
-#messages {
-  max-height: 200px;
+#chat-messages {
+  max-height: 300px;
   overflow-y: auto;
   background: var(--bg);
   border-radius: var(--radius);
   padding: 8px;
 }
 
-.msg {
-  padding: 4px 0;
-  font-size: 13px;
+.chat-msg {
+  padding: 6px 0;
   border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  line-height: 1.4;
 }
 
-.msg:last-child { border-bottom: none; }
+.chat-msg:last-child { border-bottom: none; }
+
+.chat-sender {
+  font-weight: 600;
+  color: var(--highlight);
+}
+
+.chat-time {
+  font-size: 11px;
+  color: #666;
+  margin-left: 6px;
+}
+
+.chat-text {
+  color: var(--text);
+}
+
+#chat-input-bar {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+#chat-input {
+  flex: 1;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+}
+
+#chat-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
