@@ -4,6 +4,7 @@ import { attachChatUI } from "./chat.js";
 import { setupRenegotiation } from "../webrtc/peer.js";
 import { getStream, stopStream, addMediaToPC, removeMediaFromPC, createVideoElement } from "../channels/media.js";
 import { getScreenStream } from "../channels/screen.js";
+import { initTileGrid, addTile, removeTile, hasTile } from "./tiles.js";
 
 const app = document.getElementById("app");
 if (!app) throw new Error("#app element not found");
@@ -22,12 +23,6 @@ app.innerHTML = `
       <main id="content">
         <p id="welcome">Welcome to Mesh. Open the menu to connect.</p>
       </main>
-    </div>
-
-    <div id="video-grid" style="display:none">
-      <div id="video-screen" class="video-tile screen" style="display:none"><span class="tile-label">Screen</span></div>
-      <div id="video-local" class="video-tile"><span class="tile-label">You</span></div>
-      <div id="video-remote" class="video-tile"><span class="tile-label">Peer</span></div>
     </div>
 
     <footer id="toolbar">
@@ -117,7 +112,7 @@ let activePC = null;
 let activeSignalDC = null;
 let localStream = null;
 let screenStream = null;
-let pendingMediaKind = null;  // tracks what type of media the remote is about to send
+let pendingMediaKind = null;
 
 document.addEventListener("mesh-connected", (e) => {
   const { pc, chat, file, signal, displayName } = e.detail;
@@ -125,28 +120,71 @@ document.addEventListener("mesh-connected", (e) => {
   activeSignalDC = signal;
   localStream = null;
   screenStream = null;
+  pendingMediaKind = null;
 
   overlay.style.display = "none";
 
-  const content = document.getElementById("content");
-  content.innerHTML = "";
-  attachChatUI(content, { dc: chat, dcFile: file, displayName });
+  // Replace #body with split pane layout
+  const body = document.getElementById("body");
+  body.innerHTML = `
+    <div id="split-container">
+      <div id="top-panel">
+        <div id="video-grid"></div>
+      </div>
+      <div id="divider"></div>
+      <div id="bottom-panel"></div>
+    </div>
+  `;
 
+  initTileGrid(document.getElementById("video-grid"));
+
+  // Chat goes in bottom panel
+  attachChatUI(document.getElementById("bottom-panel"), { dc: chat, dcFile: file, displayName });
+
+  // Draggable divider
+  const divider = document.getElementById("divider");
+  const topPanel = document.getElementById("top-panel");
+  const bottomPanel = document.getElementById("bottom-panel");
+  let dragging = false;
+
+  divider.addEventListener("mousedown", (e) => {
+    dragging = true;
+    divider.classList.add("active");
+    document.body.style.cursor = "row-resize";
+    document.body.style.userSelect = "none";
+  });
+
+  document.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    const splitContainer = document.getElementById("split-container");
+    const rect = splitContainer.getBoundingClientRect();
+    const pct = ((e.clientY - rect.top) / rect.height) * 100;
+    const clamped = Math.max(10, Math.min(90, pct));
+    topPanel.style.flex = clamped;
+    bottomPanel.style.flex = 100 - clamped;
+  });
+
+  document.addEventListener("mouseup", () => {
+    if (dragging) {
+      dragging = false;
+      divider.classList.remove("active");
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    }
+  });
+
+  // Renegotiation
   setupRenegotiation(pc, signal, {
     onRemoteTrack: (stream) => {
       if (pendingMediaKind === "screen") {
         pendingMediaKind = null;
-        showScreenTile(stream, false);
+        addTile("remote-screen", "Screen", stream, false);
       } else {
-        const tile = document.getElementById("video-remote");
-        tile.innerHTML = `<span class="tile-label">Peer</span>`;
-        tile.appendChild(createVideoElement(stream, false));
+        addTile("remote-cam", "Peer", stream, false);
       }
-      showGrid();
     },
   });
 
-  // Listen for media metadata from peer
   signal.addEventListener("message", (e) => {
     let msg;
     try { msg = JSON.parse(e.data); } catch { return; }
@@ -157,50 +195,6 @@ document.addEventListener("mesh-connected", (e) => {
   document.getElementById("btn-cam").disabled = false;
   document.getElementById("btn-screen").disabled = false;
 });
-
-// ── Video grid helpers ──
-
-function showGrid() {
-  const grid = document.getElementById("video-grid");
-  grid.style.display = "flex";
-}
-
-function hideGridIfEmpty() {
-  const grid = document.getElementById("video-grid");
-  if (!grid.querySelector("video")) {
-    grid.style.display = "none";
-  }
-}
-
-function showScreenTile(stream, local) {
-  const tile = document.getElementById("video-screen");
-  tile.style.display = "block";
-  tile.innerHTML = `<span class="tile-label">Screen</span>`;
-  tile.appendChild(createVideoElement(stream, local));
-  document.getElementById("video-grid").classList.add("has-screen");
-}
-
-function hideScreenTile() {
-  const tile = document.getElementById("video-screen");
-  tile.style.display = "none";
-  tile.innerHTML = `<span class="tile-label">Screen</span>`;
-  document.getElementById("video-grid").classList.remove("has-screen");
-}
-
-function showLocalVideo(stream) {
-  const tile = document.getElementById("video-local");
-  tile.innerHTML = `<span class="tile-label">You</span>`;
-  tile.appendChild(createVideoElement(stream, true));
-  showGrid();
-}
-
-function hideLocalVideo() {
-  const tile = document.getElementById("video-local");
-  tile.innerHTML = `<span class="tile-label">You</span>`;
-  if (!document.getElementById("video-remote").querySelector("video")) {
-    hideGridIfEmpty();
-  }
-}
 
 // ── Media controls ──
 
@@ -219,6 +213,7 @@ async function toggleMic() {
     if (!localStream.getVideoTracks().length) {
       stopStream(localStream);
       localStream = null;
+      removeTile("local-cam");
     }
     btnMic.classList.remove("active");
     return;
@@ -230,7 +225,7 @@ async function toggleMic() {
       for (const t of s.getAudioTracks()) localStream.addTrack(t);
     }
     addMediaToPC(activePC, localStream);
-    showLocalVideo(localStream);
+    if (!hasTile("local-cam")) addTile("local-cam", "You", localStream, true);
     btnMic.classList.add("active");
   } catch (err) {
     alert(err.message);
@@ -245,8 +240,8 @@ async function toggleCam() {
       stopStream(localStream);
       localStream = null;
     }
+    removeTile("local-cam");
     btnCam.classList.remove("active");
-    hideLocalVideo();
     return;
   }
   try {
@@ -256,7 +251,7 @@ async function toggleCam() {
       for (const t of s.getVideoTracks()) localStream.addTrack(t);
     }
     addMediaToPC(activePC, localStream);
-    showLocalVideo(localStream);
+    addTile("local-cam", "You", localStream, true);
     btnCam.classList.add("active");
   } catch (err) {
     alert(err.message);
@@ -270,28 +265,25 @@ async function toggleScreen() {
     stopStream(screenStream);
     screenStream = null;
     btnScreen.classList.remove("active");
-    hideScreenTile();
-    hideGridIfEmpty();
+    removeTile("local-screen");
     return;
   }
   try {
     const stream = await getScreenStream();
-    if (!stream) return;  // user cancelled picker
+    if (!stream) return;
     screenStream = stream;
 
-    // When the user stops sharing via the browser's native "Stop sharing" button
     stream.getVideoTracks()[0]?.addEventListener("ended", () => {
       removeMediaFromPC(activePC, screenStream);
       stopStream(screenStream);
       screenStream = null;
       btnScreen.classList.remove("active");
-      hideScreenTile();
-      hideGridIfEmpty();
+      removeTile("local-screen");
     });
 
     addMediaToPC(activePC, screenStream);
     activeSignalDC?.send(JSON.stringify({ type: "media-kind", kind: "screen" }));
-    showScreenTile(screenStream, true);
+    addTile("local-screen", "Screen", screenStream, true);
     btnScreen.classList.add("active");
   } catch (err) {
     if (err.name !== "AbortError") alert(err.message);
