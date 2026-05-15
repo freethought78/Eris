@@ -1,5 +1,4 @@
 import { createOffer, createRoomAnswer, acceptRoomAnswer } from "../webrtc/peer.js";
-import { attachChatUI } from "./chat.js";
 
 const isLocal = window.location.protocol === "file:";
 
@@ -65,11 +64,13 @@ export function attachRoomUI(container) {
     statusDiv.className = "status-box" + (className ? " " + className : "");
   }
 
-  function onChannelsOpen({ chat, file }) {
+  function onChannelsOpen({ chat, file, signal }) {
     dcChat = chat;
     dcFile = file;
     setStatus("Connected!", "connected");
-    attachChatUI(container, { dc: chat, dcFile: file, displayName: displayName() });
+    document.dispatchEvent(new CustomEvent("mesh-connected", {
+      detail: { pc, chat, file, signal, displayName: displayName() },
+    }));
   }
 
   function sendToServer(obj) {

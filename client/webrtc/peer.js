@@ -24,12 +24,16 @@ function waitForIceGathering(pc) {
   });
 }
 
-function whenBothOpen(dcChat, dcFile, cb) {
-  let c = !dcChat || dcChat.readyState === "open";
-  let f = !dcFile || dcFile.readyState === "open";
-  const check = () => { if (c && f) cb({ chat: dcChat, file: dcFile }); };
-  if (dcChat && dcChat.readyState !== "open") dcChat.addEventListener("open", () => { c = true; check(); });
-  if (dcFile && dcFile.readyState !== "open") dcFile.addEventListener("open", () => { f = true; check(); });
+function whenAllOpen(dcs, cb) {
+  const names = Object.keys(dcs);
+  const state = {};
+  names.forEach((n) => { state[n] = !dcs[n] || dcs[n].readyState === "open"; });
+  const check = () => { if (names.every((n) => state[n])) cb(dcs); };
+  names.forEach((n) => {
+    if (dcs[n] && dcs[n].readyState !== "open") {
+      dcs[n].addEventListener("open", () => { state[n] = true; check(); });
+    }
+  });
   check();
 }
 
@@ -37,31 +41,29 @@ export async function createOffer(onChannelsOpen) {
   const pc = createPeerConnection();
   const dcChat = pc.createDataChannel("mesh.chat", { ordered: true });
   const dcFile = pc.createDataChannel("mesh.file", { ordered: true });
-  whenBothOpen(dcChat, dcFile, onChannelsOpen);
+  const dcSignal = pc.createDataChannel("mesh.signal", { ordered: true });
+  whenAllOpen({ chat: dcChat, file: dcFile, signal: dcSignal }, onChannelsOpen);
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
   const sdp = await waitForIceGathering(pc);
-  return { pc, dcChat, dcFile, sdp };
+  return { pc, dcChat, dcFile, dcSignal, sdp };
 }
 
 export async function createAnswer(offerEncoded, passphrase, onChannelsOpen) {
   const offerSdp = await decryptSDP(offerEncoded, passphrase);
   const pc = createPeerConnection();
-  let dcChat = null, dcFile = null;
+  const dcs = {};
+  const dcLabelMap = { "mesh.chat": "chat", "mesh.file": "file", "mesh.signal": "signal" };
   pc.addEventListener("datachannel", (e) => {
-    if (e.channel.label === "mesh.chat") {
-      dcChat = e.channel;
-      whenBothOpen(dcChat, dcFile, onChannelsOpen);
-    } else if (e.channel.label === "mesh.file") {
-      dcFile = e.channel;
-      whenBothOpen(dcChat, dcFile, onChannelsOpen);
-    }
+    const key = dcLabelMap[e.channel.label];
+    if (key) dcs[key] = e.channel;
+    if (dcs.chat && dcs.file && dcs.signal) whenAllOpen(dcs, onChannelsOpen);
   });
   await pc.setRemoteDescription({ type: "offer", sdp: offerSdp });
   const answer = await pc.createAnswer();
   await pc.setLocalDescription(answer);
   const sdp = await waitForIceGathering(pc);
-  return { pc, dcChat, dcFile, sdp };
+  return { pc, ...dcs, sdp };
 }
 
 export async function acceptAnswer(pc, answerEncoded, passphrase) {
@@ -71,25 +73,57 @@ export async function acceptAnswer(pc, answerEncoded, passphrase) {
 
 export async function createRoomAnswer(offerSdp, onChannelsOpen) {
   const pc = createPeerConnection();
-  let dcChat = null, dcFile = null;
+  const dcs = {};
+  const dcLabelMap = { "mesh.chat": "chat", "mesh.file": "file", "mesh.signal": "signal" };
   pc.addEventListener("datachannel", (e) => {
-    if (e.channel.label === "mesh.chat") {
-      dcChat = e.channel;
-      whenBothOpen(dcChat, dcFile, onChannelsOpen);
-    } else if (e.channel.label === "mesh.file") {
-      dcFile = e.channel;
-      whenBothOpen(dcChat, dcFile, onChannelsOpen);
-    }
+    const key = dcLabelMap[e.channel.label];
+    if (key) dcs[key] = e.channel;
+    if (dcs.chat && dcs.file && dcs.signal) whenAllOpen(dcs, onChannelsOpen);
   });
   await pc.setRemoteDescription({ type: "offer", sdp: offerSdp });
   const answer = await pc.createAnswer();
   await pc.setLocalDescription(answer);
   const sdp = await waitForIceGathering(pc);
-  return { pc, dcChat, dcFile, sdp };
+  return { pc, ...dcs, sdp };
 }
 
 export async function acceptRoomAnswer(pc, answerSdp) {
   await pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
+}
+
+export function setupRenegotiation(pc, signalDC, { onRemoteTrack } = {}) {
+  let makingOffer = false;
+
+  pc.addEventListener("negotiationneeded", async () => {
+    try {
+      makingOffer = true;
+      await pc.setLocalDescription(await pc.createOffer());
+      signalDC.send(JSON.stringify({ type: "reneg-offer", sdp: pc.localDescription.sdp }));
+    } catch (err) {
+      if (err.name !== "InvalidStateError") throw err;
+    } finally {
+      makingOffer = false;
+    }
+  });
+
+  pc.addEventListener("track", (e) => {
+    onRemoteTrack?.(e.streams[0], e.track.kind);
+  });
+
+  signalDC.addEventListener("message", async (e) => {
+    let msg;
+    try { msg = JSON.parse(e.data); } catch { return; }
+
+    if (msg.type === "reneg-offer") {
+      if (makingOffer && pc.signalingState !== "stable") return;
+      await pc.setRemoteDescription({ type: "offer", sdp: msg.sdp });
+      await pc.setLocalDescription(await pc.createAnswer());
+      signalDC.send(JSON.stringify({ type: "reneg-answer", sdp: pc.localDescription.sdp }));
+    } else if (msg.type === "reneg-answer") {
+      if (pc.signalingState !== "have-local-offer") return;
+      await pc.setRemoteDescription({ type: "answer", sdp: msg.sdp });
+    }
+  });
 }
 
 export { encryptSDP, decryptSDP };

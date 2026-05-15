@@ -73,6 +73,7 @@ try {
     Test-Step "GET /ui/chat.js" { (Invoke-WebRequest -Uri "http://localhost:$Port/ui/chat.js" -UseBasicParsing -TimeoutSec 5).StatusCode -eq 200 }
     Test-Step "GET /channels/text.js" { (Invoke-WebRequest -Uri "http://localhost:$Port/channels/text.js" -UseBasicParsing -TimeoutSec 5).StatusCode -eq 200 }
     Test-Step "GET /channels/file.js" { (Invoke-WebRequest -Uri "http://localhost:$Port/channels/file.js" -UseBasicParsing -TimeoutSec 5).StatusCode -eq 200 }
+    Test-Step "GET /channels/media.js" { (Invoke-WebRequest -Uri "http://localhost:$Port/channels/media.js" -UseBasicParsing -TimeoutSec 5).StatusCode -eq 200 }
     Test-Step "GET /webrtc/peer.js" { (Invoke-WebRequest -Uri "http://localhost:$Port/webrtc/peer.js" -UseBasicParsing -TimeoutSec 5).StatusCode -eq 200 }
     Test-Step "GET /webrtc/crypto.js" { (Invoke-WebRequest -Uri "http://localhost:$Port/webrtc/crypto.js" -UseBasicParsing -TimeoutSec 5).StatusCode -eq 200 }
     Test-Step "GET /styles/main.css" { (Invoke-WebRequest -Uri "http://localhost:$Port/styles/main.css" -UseBasicParsing -TimeoutSec 5).StatusCode -eq 200 }

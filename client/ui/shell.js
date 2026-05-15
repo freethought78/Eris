@@ -1,5 +1,8 @@
 import { attachManualUI } from "./manual.js";
 import { attachRoomUI } from "./room.js";
+import { attachChatUI } from "./chat.js";
+import { setupRenegotiation } from "../webrtc/peer.js";
+import { getStream, stopStream, addMediaToPC, removeMediaFromPC, createVideoElement } from "../channels/media.js";
 
 const app = document.getElementById("app");
 if (!app) throw new Error("#app element not found");
@@ -19,8 +22,15 @@ app.innerHTML = `
         <p id="welcome">Welcome to Mesh. Open the menu to connect.</p>
       </main>
     </div>
+
+    <div id="video-grid" style="display:none">
+      <div id="video-local" class="video-tile"><span class="tile-label">You</span></div>
+      <div id="video-remote" class="video-tile"><span class="tile-label">Peer</span></div>
+    </div>
+
     <footer id="toolbar">
-      <span>Toolbar — coming in later phases</span>
+      <button id="btn-mic" class="toolbar-btn" disabled title="Microphone">🎤</button>
+      <button id="btn-cam" class="toolbar-btn" disabled title="Camera">📷</button>
     </footer>
   </div>
 
@@ -98,3 +108,108 @@ modalClose.addEventListener("click", () => {
 overlay.addEventListener("click", (e) => {
   if (e.target === overlay) overlay.style.display = "none";
 });
+
+// ── Connected state ──
+
+let activePC = null;
+let activeSignalDC = null;
+let localStream = null;
+
+document.addEventListener("mesh-connected", (e) => {
+  const { pc, chat, file, signal, displayName } = e.detail;
+  activePC = pc;
+  activeSignalDC = signal;
+  localStream = null;
+
+  overlay.style.display = "none";
+
+  const content = document.getElementById("content");
+  content.innerHTML = "";
+  attachChatUI(content, { dc: chat, dcFile: file, displayName });
+
+  setupRenegotiation(pc, signal, {
+    onRemoteTrack: (stream) => {
+      const tile = document.getElementById("video-remote");
+      tile.innerHTML = `<span class="tile-label">Peer</span>`;
+      tile.appendChild(createVideoElement(stream, false));
+      document.getElementById("video-grid").style.display = "flex";
+    },
+  });
+
+  document.getElementById("btn-mic").disabled = false;
+  document.getElementById("btn-cam").disabled = false;
+});
+
+// ── Media controls ──
+
+const btnMic = document.getElementById("btn-mic");
+const btnCam = document.getElementById("btn-cam");
+
+btnMic.addEventListener("click", toggleMic);
+btnCam.addEventListener("click", toggleCam);
+
+async function toggleMic() {
+  if (!activePC) return;
+  if (localStream?.getAudioTracks().length) {
+    removeMediaFromPC(activePC, localStream);
+    if (!localStream.getVideoTracks().length) {
+      stopStream(localStream);
+      localStream = null;
+    }
+    btnMic.classList.remove("active");
+    return;
+  }
+  try {
+    if (!localStream) localStream = await getStream({ audio: true, video: true });
+    else {
+      const s = await getStream({ audio: true, video: false });
+      for (const t of s.getAudioTracks()) localStream.addTrack(t);
+    }
+    addMediaToPC(activePC, localStream);
+    showLocalVideo(localStream);
+    btnMic.classList.add("active");
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+async function toggleCam() {
+  if (!activePC) return;
+  if (localStream?.getVideoTracks().length) {
+    removeMediaFromPC(activePC, localStream);
+    if (!localStream.getAudioTracks().length) {
+      stopStream(localStream);
+      localStream = null;
+    }
+    btnCam.classList.remove("active");
+    hideLocalVideo();
+    return;
+  }
+  try {
+    if (!localStream) localStream = await getStream({ audio: true, video: true });
+    else {
+      const s = await getStream({ audio: false, video: true });
+      for (const t of s.getVideoTracks()) localStream.addTrack(t);
+    }
+    addMediaToPC(activePC, localStream);
+    showLocalVideo(localStream);
+    btnCam.classList.add("active");
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+function showLocalVideo(stream) {
+  const tile = document.getElementById("video-local");
+  tile.innerHTML = `<span class="tile-label">You</span>`;
+  tile.appendChild(createVideoElement(stream, true));
+  document.getElementById("video-grid").style.display = "flex";
+}
+
+function hideLocalVideo() {
+  const tile = document.getElementById("video-local");
+  tile.innerHTML = `<span class="tile-label">You</span>`;
+  if (!document.getElementById("video-remote").querySelector("video")) {
+    document.getElementById("video-grid").style.display = "none";
+  }
+}

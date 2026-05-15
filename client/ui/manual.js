@@ -1,5 +1,4 @@
 import { createOffer, createAnswer, acceptAnswer, encryptSDP, decryptSDP } from "../webrtc/peer.js";
-import { attachChatUI } from "./chat.js";
 
 export function attachManualUI(container) {
   container.innerHTML = `
@@ -139,12 +138,14 @@ export function attachManualUI(container) {
     }
   });
 
-  function onChannelsOpen({ chat, file }) {
+  function onChannelsOpen({ chat, file, signal }) {
     dcChat = chat;
     dcFile = file;
     statusDiv.style.display = "block";
     statusDiv.textContent = "Connected!";
     statusDiv.className = "connected";
-    attachChatUI(container, { dc: chat, dcFile: file, displayName: displayName() });
+    document.dispatchEvent(new CustomEvent("mesh-connected", {
+      detail: { pc, chat, file, signal, displayName: displayName() },
+    }));
   }
 }
