@@ -2,19 +2,20 @@
 
 ## State of the repo
 
-This is a **design-stage repo**: `DESIGN.md` is the single source of truth. No code has been committed yet. The file tree described in DESIGN.md (`client/`, `server/`, `build.js`, etc.) does not exist in the working tree.
+Eris is being redesigned. `DESIGN.md` is the source of truth and describes the new
+architecture: an Electron app, a Go helper for streaming and controllers, and a Go
+dedicated server that bundles LiveKit.
 
-## What DESIGN.md specifies
+The code currently in the tree (`client/`, the Node `server/`, `build.js`, the test scripts)
+is the **old prototype** (anonymous, browser-only, peer-to-peer). It is replaced phase by
+phase as described in DESIGN.md section 6, not extended. Its UI look and feel may be reused.
 
-- **Server:** Node.js, no frameworks, depends only on `ws` (WebSocket) and Node built-in `http`/`fs`.
-- **Client:** Vanilla ES modules (no bundler needed for dev), `window.crypto.subtle` for SDP encryption.
-- **No test framework, no lint/typecheck config** — these are not yet in place.
-- **`build.js`** (Node script, no deps) zips `client/` + `server/` into `bundle/eris.zip`.
-- **Dev workflow:** open `client/index.html` locally or serve via `node server/index.js [--port 8080]`.
+## Key points
 
-## Critical facts
-
-- No package.json exists yet. All dependencies must be introduced.
-- No `.gitignore` exists — one will be needed for `node_modules/`, `bundle/`, etc.
-- The repo has zero commits. First commit should set up the scaffold that DESIGN.md describes.
-- `DESIGN.md` is authoritative — read it before making structural decisions.
+- Eris replaces Discord; it is never run alongside it.
+- Anonymity and zero-persistence are no longer goals. The server stores history and files
+  with host-set retention.
+- Native app only (Electron). No browser access.
+- Phase 0 (the streaming latency prototype) comes before anything else is built.
+- Related project: `~/repos/ft party play` (Selkies-based remote play). Its auto-quality
+  method, network test tools and controller permission model carry over.

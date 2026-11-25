@@ -1,430 +1,362 @@
-# Eris — Design Document
-### A decentralized, self-replicating, encrypted peer-to-peer communication framework
+# Eris — Design
+
+Eris is a self-hosted chat app that feels like Discord: servers, text channels, voice
+channels, going live, and playing games together with friends' controllers. There is no
+cloud. Anyone can run an Eris server on their own machine, and the Eris app keeps a list of
+servers you've joined, the way TeamSpeak does.
+
+This document settles the parts that are hard to change later: what the pieces are, how
+they talk, what's in the first version, and the build order. Details like UI layout and
+message formats are decided while building.
+
+The original Eris (anonymous, no stored data, browser-only, peer-to-peer) is in git history
+up to commit `ea7f535`. It is replaced, not extended.
 
 ---
 
-## 1. Project Philosophy
+## 1. Goals
 
-Eris is a browser-based communication platform with no persistent server, no stored user data, and no central authority. Every instance of Eris — whether hosted on a private server or opened as a local HTML file — is a fully functional node. The software propagates through its own use: every instance offers a download of the complete package, including the lightweight server stack needed to host a new instance.
+- **Feels like Discord** for the things people actually use: servers, channels, chat with
+  history and files, voice, cameras, going live.
+- **No cloud.** A host downloads one server program and runs it. Clients connect to it
+  directly.
+- **Lowest practical latency for playing together.** A friend with a controller should feel
+  as little delay as the distance between you allows.
+- **Eris replaces Discord, never runs beside it.** Eris owns voice, so it can keep voice out
+  of the game audio it streams. Nobody hears themselves.
+- **Windows and Linux** for both the app and the server.
 
-Core principles:
-- **The server does as little as possible.** It serves files and brokers temporary WebRTC handshakes. It never stores messages, files, user data, or session history.
-- **Peers own their connection.** Once two clients are connected, the server is completely out of the picture.
-- **The client works offline.** A user can open `index.html` from their local filesystem and use all features, including connecting to remote peers via manual SDP exchange.
-- **No artificial limitations.** Text, voice, video, screenshare, and file transfer are available in all connection modes with no imposed restrictions.
-- **Self-replication is a first-class feature.** Every instance carries its own installer.
+### Not goals (for now)
+
+- Feature parity with Discord (see section 9 for what's left out of v1).
+- Anonymity or protection from the server host. The host can read what's stored on their
+  server.
+- Browser access. Everyone uses the installed app.
+- Code signing, auto-update, encrypted server connections, automatic port forwarding. All
+  can be added later without redesign.
 
 ---
 
-## 2. Architecture Overview
+## 2. The pieces
 
 ```
-┌─────────────────────────────────────────────────┐
-│                   CLIENT                        │
-│                                                 │
-│  ┌──────────┐   ┌──────────┐   ┌────────────┐  │
-│  │  UI Layer │   │ WebRTC   │   │  State     │  │
-│  │ (HTML/JS) │◄──│ Manager  │◄──│  Manager   │  │
-│  └──────────┘   └────┬─────┘   └────────────┘  │
-│                      │                          │
-│          ┌───────────┴────────────┐             │
-│          │                        │             │
-│   Path A: Room-assisted     Path B: Manual SDP  │
-│   (server brokers SDP)      (out-of-band SDP)   │
-└──────────┬─────────────────────────────────────-┘
-           │ (only during handshake)
-┌──────────▼──────────┐
-│     SERVER (minimal) │
-│                      │
-│  - Serves /client    │
-│  - Serves /download/eris.zip  │
-│  - Ephemeral rooms   │
-│    (SDP relay only)  │
-│  - Zero persistence  │
-└──────────────────────┘
+┌──────────────────────────── Eris app (Electron) ─────────────────────────────┐
+│  UI: server list · channels · chat · members · voice · watch streams         │
+│  LiveKit client (voice, cameras, watching)                                    │
+│        │ spawns and talks to (stdin/stdout)                                   │
+│        ▼                                                                      │
+│  eris-helper (Go): capture + hardware encode (FFmpeg) · game audio minus     │
+│  Eris voice · virtual controllers · player game window · controller polling  │
+└────────┬───────────────────────────────────────────────────┬─────────────────┘
+         │ 1 TCP port: HTTP + WebSocket                       │ direct (players only)
+         │ 1 UDP port: media                                  ▼
+┌────────▼──────────────── Eris server (host machine) ──┐   another player's
+│  eris-server (Go, single binary)                       │   eris-helper
+│   · SQLite: channels, messages, members, roles         │
+│   · files folder: uploads                              │
+│   · WebSocket: live chat, presence, signalling         │
+│   · starts and configures LiveKit, proxies its port    │
+│  livekit-server (bundled, managed by eris-server)      │
+│   · relays voice, cameras, Go Live to everyone         │
+└────────────────────────────────────────────────────────┘
 ```
 
-After handshake completion, all communication flows exclusively over WebRTC DataChannels and MediaStreams, peer to peer, with no server involvement.
+| Piece | Language | What it does |
+|---|---|---|
+| **Eris app** | Electron, JavaScript/TypeScript | The whole user interface. Voice, cameras and watching use the LiveKit client library. |
+| **eris-helper** | Go, ships inside the app | Everything that needs native code: screen capture and hardware encoding, game audio, virtual controllers, the player's game window. |
+| **eris-server** | Go, single binary | Stores and serves everything persistent, handles live chat, hands out LiveKit access, starts LiveKit. |
+| **livekit-server** | Bundled binary (Apache 2.0) | The media relay. Never seen by the host; eris-server runs it. |
+
+### Why these choices
+
+- **LiveKit instead of our own WebRTC code.** It already does the relay, simulcast (each
+  viewer gets the quality their connection can take), reconnection, device switching and
+  speaking detection. That's the largest and most fiddly part of a voice app, and it's
+  solved.
+- **Go for the server and helper.** Hosts get one file to run, no Node install. Go
+  cross-compiles to Windows and Linux easily. Pion (Go's WebRTC library) and LiveKit's Go SDK
+  can send video that's already been encoded, which the helper needs.
+- **SQLite via `modernc.org/sqlite`** (pure Go, no C compiler needed). One file holds the
+  whole server; backing up means copying a folder.
+- **FFmpeg as a subprocess**, not linked in. The helper starts `ffmpeg` and reads encoded
+  video from its output. Avoids the build problems of linking FFmpeg, and the pipe adds no
+  meaningful delay.
+- **Electron.** Its capture and media behave like Chrome on every platform. Tauri relies on
+  each system's own web engine, where capture support is uneven.
 
 ---
 
-## 3. Repository Structure
+## 3. Server
+
+### 3.1 Running a server
+
+```
+eris-server            # first run creates eris-data/ next to the binary
+```
+
+On first run it:
+
+1. Creates `eris-data/` with `eris.db`, `files/` and `settings.json`.
+2. Generates LiveKit keys and starts LiveKit.
+3. Prints the address to share and a one-time **owner code**. The first person to join with
+   that code becomes the owner.
+
+**Ports:** one TCP port (default `7300`) for HTTP and WebSocket, including LiveKit's
+signalling, which eris-server proxies. One UDP port (default `7301`) for all media, using
+LiveKit's single-port mode. The host forwards those two ports. That's all.
+
+### 3.2 Identity and roles
+
+- **Joining:** the first time you join, you give the server password (if it has one) and a
+  display name. The server answers with a random **member token**. The app stores it in
+  your server list and uses it from then on. No accounts, no keys.
+- **Roles:** owner, admin, member. Admins manage channels and kick or ban members. The
+  owner also changes server settings and appoints admins.
+- Losing the token means rejoining as a new member. Good enough for v1.
+
+### 3.3 Storage and retention
+
+Host settings (in `settings.json`, also editable by the owner from the app):
+
+| Setting | Default | Notes |
+|---|---|---|
+| `message_retention_days` | 30 | `0` = don't store messages at all; chat is live only |
+| `file_retention_days` | 30 | Separate, so files can be kept shorter than text |
+| `max_file_mb` | 100 | Per upload |
+| `max_storage_gb` | 10 | When full, the oldest files are removed first |
+| `server_password` | none | Asked once, on first join |
+| `max_stream_viewers` | 10 | Per Go Live stream |
+| `max_stream_kbps` | 12000 | Per stream |
+| `upload_budget_mbps` | 100 | Total the relay may send; quality drops to stay inside it |
+
+A cleanup job runs hourly and deletes anything past its retention.
+
+### 3.4 How the app talks to the server
+
+- **WebSocket** for everything live: new messages, edits, deletes, presence, who's in which
+  voice channel, typing, Go Live and Play Together signalling.
+- **HTTP** for everything bulk: message history (paged), file upload and download
+  (streamed straight to and from disk), and LiveKit access tokens.
+- Messages are JSON. Formats are defined in code as we build, not here.
+
+---
+
+## 4. App
+
+### 4.1 Layout
+
+The familiar four columns: server icons on the far left, the selected server's channels,
+the chat or voice view in the middle, the member list on the right. A user panel at the
+bottom of the channel list holds mute, deafen and settings.
+
+### 4.2 Server list
+
+- **Add a server** by address, or by clicking an `eris://host:port` link (the app registers
+  the `eris:` link type, so links shared anywhere open the app and add the server).
+- The app keeps one connection open to each server in the list, for unread and mention
+  badges. Servers can be reordered and removed.
+- Stored locally: address, member token, display name, order, per-server notification
+  setting.
+
+### 4.3 Text channels
+
+Send, history with infinite scroll, attachments (images show inline, other files as a
+download card), edit and delete your own messages, mentions with notification badges, and
+unread markers.
+
+### 4.4 Voice channels
+
+Join and leave, mute, deafen, push-to-talk with a global hotkey (works while a game has
+focus), speaking indicators, per-person volume, cameras. Voice uses the microphone through
+Electron with echo cancellation and noise suppression on.
+
+---
+
+## 5. Streaming: Go Live and Play Together
+
+Both use the same pipeline in eris-helper. Go Live is a stream people watch. Play Together
+is a Go Live stream that also accepts controllers.
+
+### 5.1 Capture and encode (streamer side)
+
+- **Screen:** FFmpeg's `ddagrab` on Windows (desktop duplication, passed straight to the
+  encoder on the graphics card). On Linux, X11 capture first, PipeWire capture for Wayland
+  later.
+- **Encoder:** whichever the machine has, in order: NVENC, AMF, Quick Sync, VA-API, then
+  software x264 as a last resort.
+- **Codec:** H.264 for v1. Every graphics card can decode it in hardware. AV1 or HEVC later
+  if worth it.
+- **Low-latency settings:** no B-frames, no lookahead, a very small rate-control buffer (so
+  every frame is about the same size), gradual intra refresh instead of large keyframes,
+  and each frame encoded as soon as it's captured.
+- **Bitrate control:** ft party play's auto-quality method, ported: lower the bitrate when
+  any player falls more than the target delay behind their best round trip, raise it slowly
+  when everyone is comfortably inside it. The helper controls the encoder directly, so this
+  carries over in full.
+
+### 5.2 Game audio without Eris voice
+
+The point of Eris owning voice: the stream's audio is everything on the PC **except Eris
+itself**.
+
+- **Windows:** capture all system audio while excluding Eris's process tree, using Windows'
+  process loopback capture. Microsoft documents it for Windows 11 (build 20348 and later);
+  it's reported to work on recent Windows 10 too, which Phase 3 must confirm. On a system
+  without it, Go Live falls back to full system audio with a warning. Needs a small piece of
+  Windows-specific code, because FFmpeg can't do this.
+- **Linux:** the helper connects every application's output to its capture stream except
+  Eris's, and keeps that up to date as applications start and stop (PipeWire).
+- Encoded as Opus.
+
+### 5.3 Watching
+
+The helper publishes the stream into the voice channel's LiveKit room. Watchers see it in
+the Eris app like any video tile. LiveKit gives each watcher the best quality their
+connection allows. The streamer sees a viewer count and the host's limits apply (section
+3.3).
+
+**Sharing a single window** (a browser, a document) uses Electron's built-in capture
+instead of the helper. It's a few lines with the LiveKit client and is fine for non-game
+content.
+
+### 5.4 Play Together
+
+1. The streamer turns on "Allow controllers" for their stream.
+2. A watcher clicks **Request controller**. The streamer approves and picks a slot (Player
+   2, 3 or 4).
+3. The player's helper connects **directly** to the streamer's helper (signalled through
+   eris-server), not through the relay. If a direct connection can't be made, it falls back
+   to watching through LiveKit, with controller input over LiveKit's data channel.
+4. The player gets a separate **game window** showing the stream with the lowest possible
+   delay. Everyone else keeps watching in the app.
+5. The streamer's helper plugs in a virtual Xbox 360 controller for that slot:
+   `uinput` on Linux, ViGEm on Windows (installed on first use, needs admin once).
+
+**Players can only send controller input.** No keyboard, mouse or clipboard, as in ft party
+play. The streamer can revoke a slot at any time.
+
+### 5.5 Latency tricks (player path)
+
+| Where | What we do |
+|---|---|
+| Capture | Encode each frame the moment it arrives; capture at the monitor's full refresh rate |
+| Encode | Settings in 5.1 |
+| Network | Direct connection, no relay hop; UDP so a lost packet never blocks the next frame |
+| Loss | Forward error correction instead of waiting for re-sends where possible |
+| Playback | No smoothing buffer; frames are shown as soon as they're decoded |
+| Decode and display | Hardware decode, drawn straight to the game window |
+| Controller | Read natively at 1000 Hz; every packet carries the full controller state over a channel that never re-sends, so a lost packet costs nothing |
+
+**Target:** player's button-to-screen delay = network round trip + 40 ms or less. Measured
+with an on-screen frame timestamp, host screen to player screen.
+
+---
+
+## 6. Build order
+
+Each phase ends with something usable with friends.
+
+### Phase 0 — Streaming prototype (go / no-go)
+
+The only part with real uncertainty, so it comes first.
+
+- Helper captures the main monitor with NVENC, sends it over WebRTC to a second machine,
+  shows it in a game window, and sends a controller back.
+- Measure delay with the frame timestamp, and on bad connections with `netsim.py` from ft
+  party play.
+- Repeat with a Windows machine as host.
+- Decide the player game window: (a) the helper feeds `mpv` in low-latency mode, or (b) an
+  Electron window decoding with WebCodecs. Pick whichever measures faster with acceptable
+  effort.
+- Confirm LiveKit accepts our pre-encoded video, and whether that works with simulcast.
+
+**Pass:** host-to-player delay inside the target on Linux and Windows. **Fail:** fall back to
+Selkies for Linux hosts and Electron's built-in WebRTC capture elsewhere, and revisit.
+
+### Phase 1 — Server and text
+
+eris-server with SQLite, member tokens, roles, text channels, history, attachments,
+retention. App shell with server list, `eris://` links, chat, member list, unread badges.
+
+### Phase 2 — Voice
+
+Bundled LiveKit, voice channels, mute, deafen, push-to-talk, speaking indicators, per-person
+volume, cameras.
+
+### Phase 3 — Go Live
+
+Helper streaming into LiveKit, game audio without Eris voice, watching in the app, window
+sharing, host stream limits.
+
+### Phase 4 — Play Together
+
+Controller requests and slots, direct helper-to-helper connection with fallback, game
+window, virtual controllers on both systems, auto-quality port.
+
+### Phase 5 — Packaging
+
+App installers (AppImage, Windows installer), server downloads for both systems, GitHub
+releases, a short hosting guide (ports, owner code, settings).
+
+---
+
+## 7. Repository layout
 
 ```
 eris/
-├── server/
-│   ├── index.js          # Main server entry point (Node.js, no frameworks)
-│   ├── rooms.js          # Ephemeral room state manager
-│   ├── package.json      # Minimal dependencies: ws (WebSocket), serve-static
-│   └── README.md         # Self-hosting instructions
-│
-├── client/
-│   ├── index.html        # Single entry point; works opened locally or served
-│   ├── app.js            # Main application bootstrap
-│   ├── webrtc/
-│   │   ├── peer.js       # RTCPeerConnection wrapper, SDP generation/parsing
-│   │   ├── eris.js       # Multi-peer mesh manager (handles N-party connections)
-│   │   └── crypto.js     # SDP encryption/decryption, key derivation
-│   ├── channels/
-│   │   ├── text.js       # Text messaging over DataChannel
-│   │   ├── file.js       # File transfer (chunked) over DataChannel
-│   │   ├── media.js      # Voice/video getUserMedia management
-│   │   └── screen.js     # Screen share getDisplayMedia management
-│   ├── ui/
-│   │   ├── shell.js      # Main layout, panel management, menu system
-│   │   ├── room.js       # Room join/create UI (Path A)
-│   │   ├── manual.js     # Manual SDP exchange UI (Path B)
-│   │   ├── chat.js       # Text chat UI component
-│   │   ├── peers.js      # Peer list, status indicators
-│   │   └── download.js   # Download link logic (detects server vs local)
-│   └── styles/
-│       └── main.css      # All styles; CSS variables for theming
-│
-├── bundle/               # Output directory for the distributable zip
-│   └── eris.zip          # Auto-generated: full client + server package
-│
-└── build.js              # Packages client + server into eris.zip for download
+├── app/          Electron app (UI, LiveKit client, talks to helper)
+├── helper/       eris-helper (Go)
+├── server/       eris-server (Go)
+├── tools/        latency and bad-network test tools (netsim etc., from ft party play)
+└── DESIGN.md
 ```
+
+The old `client/`, `server/` (Node) and `build.js` are removed as each phase replaces them.
 
 ---
 
-## 4. Server — Specification
+## 8. What carries over
 
-The server is a single Node.js file with minimal dependencies. It must remain small enough that a non-technical user can read it and understand it completely.
-
-**Dependencies:** `ws` (WebSocket library), Node.js built-in `http` and `fs`. No Express, no database, no session middleware.
-
-**What the server does:**
-
-1. Serves all files in `/client/` as static assets, with correct MIME types.
-2. Serves `/download/eris.zip` — the full bundled package — at a well-known URL.
-3. Opens a WebSocket endpoint at `/signal` for room-based SDP brokering.
-4. Maintains an in-memory rooms object (plain JS object, never written to disk).
-
-**Room lifecycle:**
-1. Client sends `{ type: "create", room: "name", password: "hash" }` → server creates room entry.
-2. Second client sends `{ type: "join", room: "name", password: "hash" }` → server validates password hash and forwards SDP offer to the first client.
-3. First client sends SDP answer → server forwards to joining client.
-4. Server deletes the room entry. Its job is done.
-5. All subsequent ICE candidates are exchanged the same way during handshake, then server forgets them.
-
-**What the server never does:**
-- Never logs message content.
-- Never stores SDP strings after forwarding.
-- Never holds references to connected peers after handshake.
-- Never stores room passwords in plaintext — it receives and compares hashes only.
-- Never requires authentication to use.
-
-**Room password handling:**
-The client hashes the password with SHA-256 before sending it to the server. The server stores and compares only hashes. The actual password is never transmitted.
-
-**Server boot:**
-```
-node server/index.js [--port 8080] [--host 0.0.0.0]
-```
-Defaults to port 8080. Prints the local and LAN IP on startup so the hoster can share the address immediately.
-
----
-
-## 5. WebRTC Layer — Specification
-
-### 5.1 STUN Configuration
-
-All `RTCPeerConnection` instances are initialized with STUN servers. STUN is stateless — it answers only "what is your public IP?" and nothing else. No user data passes through STUN. Use multiple servers for reliability:
-
-```javascript
-const ICE_SERVERS = [
-  { urls: "stun:stun.l.google.com:19302" },
-  { urls: "stun:stun1.l.google.com:19302" },
-  { urls: "stun:stun.cloudflare.com:3478" }
-];
-```
-
-There is no TURN server. A small percentage of users behind symmetric NAT may fail to connect. This is a known WebRTC limitation documented in the UI, not a design failure.
-
-### 5.2 SDP Flow — Path A (Room-assisted)
-
-```
-Peer A                    Server                   Peer B
-  |                          |                        |
-  |── create room ──────────►|                        |
-  |                          |◄─── join room ─────────|
-  |◄── peer joined ─────────|                        |
-  |── createOffer() ────────►|─── forward offer ─────►|
-  |                          |◄── createAnswer() ─────|
-  |◄── forward answer ──────|                        |
-  |── ICE candidates ───────►|─── forward ────────────|
-  |◄── ICE candidates ───────|◄─── forward ───────────|
-  |                    [room deleted]                  |
-  |◄══════════════ DataChannel open ═════════════════►|
-```
-
-### 5.3 SDP Flow — Path B (Manual)
-
-```
-Peer A                                              Peer B
-  |                                                    |
-  |── createOffer()                                    |
-  |── encrypt SDP ──► [copy string] ──► [any channel]►|
-  |                                     decrypt SDP ──|
-  |                                   createAnswer() ─|
-  |◄── [any channel] ◄── encrypt SDP ◄── encrypt SDP ─|
-  |── decrypt SDP                                      |
-  |── setRemoteDescription()                           |
-  |◄══════════════ DataChannel open ═════════════════►|
-```
-
-The UI for Path B presents:
-1. A "Generate Offer" button that produces an encrypted, compressed, Base64-encoded string.
-2. A text area to paste an answer string received from the remote peer.
-3. Clear human-readable instructions on what to do with each string.
-
-### 5.4 SDP Encryption
-
-SDP strings contain metadata (IP addresses, codec details) that some users may not want exposed in transit through a third-party channel (Discord, email). All SDP strings are encrypted before display.
-
-**Method:**
-- User optionally sets a shared passphrase before generating offer.
-- Key derived from passphrase using PBKDF2 (100,000 iterations, SHA-256).
-- SDP encrypted with AES-GCM-256.
-- Output: `Base64(IV + ciphertext)`, prepended with a short version prefix for future compatibility.
-- If no passphrase is set, SDP is still compressed and Base64-encoded but not encrypted (clearly indicated in UI).
-
-All crypto uses the browser's native `window.crypto.subtle` API. No third-party crypto libraries.
-
-### 5.5 Multi-party Mesh (Eris)
-
-WebRTC is natively 1:1. Multi-party is implemented as a full mesh — each participant holds a direct `RTCPeerConnection` to every other participant.
-
-`eris.js` manages:
-- A Map of `peerId → RTCPeerConnection`.
-- Automatic offer generation when a new peer is introduced (via room broadcast or manual introduction).
-- Graceful removal of a peer from the map when their connection closes.
-- Broadcasting a DataChannel message to all connected peers.
-
-**Practical limit:** Full mesh scales reasonably to 6-8 participants for audio/video. For text and file transfer the limit is much higher. The UI should display a warning when video peers exceed 6. This is not enforced — it is advisory.
-
----
-
-## 6. DataChannel Architecture
-
-Every peer connection opens multiple named DataChannels for different traffic types, allowing independent buffering and priority:
-
-| Channel name | Purpose | Ordered | Max retransmits |
-|---|---|---|---|
-| `eris.chat` | Text messages | yes | unlimited |
-| `eris.file` | File transfer chunks | yes | unlimited |
-| `eris.signal` | Internal mesh signaling (peer introductions) | yes | unlimited |
-| `eris.state` | Application state sync (for future app layer) | yes | unlimited |
-
-Each channel is opened by the connection initiator. Both sides listen for `ondatachannel` to receive channels opened by remote peers.
-
-### 6.1 File Transfer Protocol
-
-Files are chunked at 64KB per chunk and sent over `eris.file` with a simple envelope:
-
-```json
-{ "id": "uuid", "name": "filename.ext", "size": 1048576, "chunk": 3, "total": 16, "data": "base64..." }
-```
-
-The receiver reconstructs chunks by `id`, displays progress, and assembles the Blob when `chunk === total - 1`. No size limit is imposed by the application.
-
----
-
-## 7. Media Channels
-
-### 7.1 Voice and Video
-
-`media.js` wraps `getUserMedia`. When a user enables their microphone or camera:
-1. The local stream is added to all active `RTCPeerConnection` instances via `addTrack`.
-2. Remote tracks are received via `ontrack` and attached to `<audio>` or `<video>` elements.
-3. Renegotiation (new offer/answer cycle) is triggered automatically via `onnegotiationneeded`.
-
-In Path B (manual), renegotiation requires a new manual SDP exchange. The UI must clearly prompt both peers to re-exchange SDPs when media is added after initial connection. This is a known UX friction point of manual P2P and should be explained in the UI.
-
-In Path A (room-assisted), renegotiation happens automatically through the server if the room still exists. Once the room is deleted after initial connection, the same manual renegotiation prompt is used.
-
-**Design recommendation:** Encourage users to decide on media usage before connecting, to minimize renegotiation.
-
-### 7.2 Screen Share
-
-`screen.js` wraps `getDisplayMedia`. Functionally identical to camera video from the WebRTC perspective — it produces a MediaStream that is added via `addTrack`. The UI distinguishes it visually with a different border or label on the video tile.
-
----
-
-## 8. Encryption Summary
-
-| Layer | Method | Notes |
+| From | Kept | Reason |
 |---|---|---|
-| SDP strings (Path B) | AES-GCM-256, passphrase-derived | Optional but recommended |
-| Room passwords (Path A) | SHA-256 hash sent to server | Plaintext never leaves browser |
-| DataChannel content | DTLS (WebRTC native) | Automatic, always on |
-| Media streams | SRTP (WebRTC native) | Automatic, always on |
+| Eris | Look and feel, CSS, video tile grid, call and toast UI | Restyled into the new layout |
+| ft party play | Auto-quality method | Ported to the helper's encoder control |
+| ft party play | `netsim.py`, scenario tests | Reused for latency testing |
+| ft party play | Controller-only permissions, one slot per player | Same model in Play Together |
+| ft party play | Virtual Xbox 360 pad via `uinput` | Same approach on Linux |
 
-All WebRTC connections are end-to-end encrypted by the protocol itself. The application-layer SDP encryption is an additional privacy measure for the handshake phase only.
-
----
-
-## 9. UI Structure
-
-The interface is a single-page application with no framework dependency. Vanilla JS with ES modules. No bundler required for development — the browser's native module system is used directly. A simple build step (esbuild or equivalent) can produce a single-file bundle for the distributable package.
-
-### 9.1 Layout
-
-```
-┌─────────────────────────────────────────────────────┐
-│ [≡ Menu]                    Eris          [peers: 2] │
-├──────────────┬──────────────────────────────────────┤
-│              │                                       │
-│  Peer List   │         Main Content Area             │
-│              │   (chat / video grid / file panel)    │
-│  ● Alice     │                                       │
-│  ● Bob       │                                       │
-│              │                                       │
-├──────────────┴──────────────────────────────────────┤
-│ [📎 File] [🎤 Mic] [📷 Cam] [🖥 Share] [💬 Chat]   │
-└─────────────────────────────────────────────────────┘
-```
-
-### 9.2 Menu Contents
-
-The hamburger/menu button opens a slide-out panel containing:
-- Connect (opens connection modal — Path A or Path B choice)
-- Settings (STUN server config, display name, theme)
-- About (project description, source link)
-- **Download** (download eris.zip — always present, always functional)
-
-The Download option is the self-replication mechanism. It is present but not prominently advertised in the main UI — it lives in the menu, accessible but not intrusive.
-
-### 9.3 Connection Modal
-
-On open, presents two clearly labeled options:
-
-**Option 1: Join or create a room**
-- Requires a server address (pre-filled if client was loaded from a server)
-- Room name field
-- Password field
-- Join / Create button
-
-**Option 2: Manual connection**
-- Explains in plain language: "No server needed. Share a code with your contact."
-- Step 1: Generate offer → displays encrypted string → copy button
-- Step 2: Paste answer from contact → connect button
-- Optional passphrase field for SDP encryption
-
-### 9.4 Download Behavior
-
-`download.js` detects whether the client is running:
-- **From a server:** The download link points to `/download/eris.zip` on that server.
-- **From local filesystem:** The download link points to a pre-bundled `eris.zip` that is included alongside `index.html` in the distributable package.
-
-In both cases, a download is always available.
+Dropped: manual code-pasting connections, peer-to-peer file transfer, the self-replicating
+zip, SDP encryption, the Node server.
 
 ---
 
-## 10. Self-Replication Build Process
+## 9. Left out of v1
 
-`build.js` is a Node.js script (no external dependencies) that:
-1. Copies `/client/` and `/server/` into a temp directory.
-2. Zips the temp directory into `/bundle/eris.zip`.
-3. Copies `eris.zip` into `/client/` so it is served by the static file server.
-
-This script runs as part of deployment. The distributable package (`eris.zip`) therefore always contains the server stack, the client, and a copy of itself.
-
-**The self-replication chain:**
-```
-Alice hosts an instance → Bob downloads eris.zip from Alice's instance
-→ Bob hosts his own instance → Carol downloads from Bob's instance → ...
-```
+Threads, reactions, embeds and link previews, direct messages, friends, search, custom
+emoji, detailed per-channel permissions, encrypted server connections, automatic port
+forwarding, auto-update, code signing, macOS. None of these need a redesign to add.
 
 ---
 
-## 11. Tech Stack — Final Decisions
+## 10. Risks
 
-| Concern | Choice | Reason |
-|---|---|---|
-| Server runtime | Node.js | Universal, minimal, no install on most systems |
-| Server WebSocket | `ws` package | Single dependency, tiny, well-maintained |
-| Server HTTP | Node built-in `http` | No Express needed for this scope |
-| Client JS | Vanilla ES modules | No framework overhead, works without bundler |
-| Client 3D (future) | Three.js (CDN) | Not needed for v1; DataChannel `eris.state` is ready for it |
-| Client crypto | `window.crypto.subtle` | Native, no library needed |
-| Client build | esbuild (optional) | Single-file bundle for offline use |
-| Styling | Vanilla CSS with variables | No preprocessor needed |
-| Bundling | Node built-in `fs` + `zlib` | No build tool dependency for self-replication |
+| Risk | Mitigation |
+|---|---|
+| Hardware encoding behaves differently across graphics cards | Phase 0 tests NVIDIA first; AMD and Intel tested before Phase 3 ships; software x264 fallback |
+| Windows virtual controller driver (ViGEm) is no longer maintained | It still works on current Windows; revisit if it breaks |
+| LiveKit doesn't take pre-encoded video with simulcast | Single quality layer with auto-quality for the slowest watcher (ft party play's behaviour) |
+| Hosts struggle with port forwarding | Only two ports; clear hosting guide; automatic port forwarding later |
+| A home server's upload can't feed many watchers | Host limits in 3.3; quality drops gracefully instead of failing |
+| Direct player connections blocked by some routers | Automatic fallback through LiveKit |
 
 ---
 
-## 12. Implementation Phases
+## 11. Open decisions
 
-### Phase 1 — Skeleton
-- Server: static file serving + WebSocket endpoint listening
-- Client: index.html loads, ES modules resolve, no errors in console
-- Download link present and functional (serves eris.zip)
-
-### Phase 2 — Manual P2P Connection
-- `peer.js`: create offer, encrypt, display as string
-- `peer.js`: accept answer string, decrypt, establish connection
-- `eris.chat` DataChannel opens and sends/receives a test message
-- Two browser tabs can connect to each other using copy-paste
-
-### Phase 3 — Room System
-- `rooms.js` on server: create, join, forward SDP, delete
-- Client Path A UI: create room, join room, automatic handshake
-- Same DataChannel test as Phase 2 but without manual string exchange
-
-### Phase 4 — Text Chat
-- `text.js`: full chat UI over `eris.chat` DataChannel
-- Message history in memory (cleared on disconnect)
-- Display names, timestamps
-
-### Phase 5 — File Transfer
-- `file.js`: chunked send/receive over `eris.file`
-- Progress indicator
-- Receive and offer download of completed file
-
-### Phase 6 — Voice and Video
-- `media.js`: getUserMedia, addTrack, ontrack, video grid UI
-- Mute/unmute, camera on/off controls
-
-### Phase 7 — Screen Share
-- `screen.js`: getDisplayMedia, displayed as a named video tile
-
-### Phase 8 — Multi-party
-- `eris.js`: manage multiple RTCPeerConnections
-- Peer introduction via `eris.signal` DataChannel
-- Peer list UI with connection status
-
-### Phase 9 — Polish
-- SDP encryption passphrase UI
-- STUN server configuration in settings
-- NAT failure detection and user-facing explanation
-- Responsive layout
-- Theming via CSS variables
-- Self-hosting README
-
----
-
-## 13. Known Limitations and Non-goals
-
-- **No TURN server.** Users behind symmetric NAT (~10-15% of users) may fail to connect. The UI explains this with a plain-language message and suggests alternatives (use Path A with a server that has a public IP, or use a VPN).
-- **No persistence.** Chat history, transferred files, and connection state exist only in memory for the duration of the session. This is a feature, not a bug.
-- **No accounts.** Display names are set per-session and are not verified. There is no identity layer.
-- **No end-to-end encryption beyond WebRTC's native DTLS/SRTP.** All DataChannel and media traffic is encrypted in transit by the protocol. There is no additional application-layer encryption on messages after the connection is established. This is intentional — adding it would require a key exchange protocol that adds significant complexity with marginal gain over DTLS for this use case.
-- **Eris video does not scale beyond ~6-8 participants.** This is a fundamental WebRTC full-mesh limitation and is not solvable without an SFU, which would require a real server. The UI warns but does not block.
-- **Renegotiation in Path B requires manual re-exchange of SDP.** Adding media after connection is established requires both users to repeat the SDP exchange. This is documented and explained in the UI.
-
----
-
-## 14. Security Considerations for the Implementation
-
-- Never `eval()` any received DataChannel message.
-- Sanitize all received text before inserting into the DOM (use `textContent`, never `innerHTML` with received data).
-- Room passwords are hashed client-side before transmission. The server must never log WebSocket message contents.
-- SDP strings, even encrypted, should not be logged to the browser console in production builds.
-- The server should set `Content-Security-Policy` headers on all served files.
-- File transfers should present a save dialog to the user rather than auto-executing received content.
-
----
-
-*End of design document. All phases through Phase 9 should be considered in scope for a complete v1.0 implementation.*
+- **UI framework.** Recommendation: Svelte with TypeScript. A chat app has many live lists
+  (messages, members, voice users, unread counts), and a small reactive framework removes
+  most of the hand-written DOM updates that cause bugs. The current vanilla JS UI is being
+  restyled into a new layout anyway.
+- **Player game window:** mpv or WebCodecs, decided by Phase 0 measurements.
+- **Default ports and limits** in 3.1 and 3.3 are starting points; adjust after real use.
