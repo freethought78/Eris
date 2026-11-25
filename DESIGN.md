@@ -79,9 +79,12 @@ up to commit `ea7f535`. It is replaced, not extended.
   can send video that's already been encoded, which the helper needs.
 - **SQLite via `modernc.org/sqlite`** (pure Go, no C compiler needed). One file holds the
   whole server; backing up means copying a folder.
-- **FFmpeg as a subprocess**, not linked in. The helper starts `ffmpeg` and reads encoded
-  video from its output. Avoids the build problems of linking FFmpeg, and the pipe adds no
-  meaningful delay.
+- **FFmpeg's libraries, called directly from the helper** (cgo), not the `ffmpeg` program.
+  The first Phase 0 prototype used the `ffmpeg` program and measured about 40 ms of hidden
+  queueing on the decode side, where hardware decoding itself takes a few ms. The program
+  also can't change the bitrate mid-stream or make a keyframe on request, which
+  auto-quality and new viewers need. The libraries do both. On Windows the helper ships
+  FFmpeg's DLLs.
 - **Electron.** Its capture and media behave like Chrome on every platform. Tauri relies on
   each system's own web engine, where capture support is uneven.
 

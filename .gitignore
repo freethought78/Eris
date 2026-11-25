@@ -4,3 +4,4 @@ client/eris.zip
 client/bundle.js
 .server-*.txt
 .test-*.txt
+prototype/stream/bin/

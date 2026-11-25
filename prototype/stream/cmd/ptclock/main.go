@@ -1,0 +1,117 @@
+// ptclock draws the current time as a barcode in the top-left corner of the
+// host's screen, so the player can measure true screen-to-screen delay. With
+// -busy it also fills its window with moving content, so the encoder has real
+// work to do (a still desktop compresses to almost nothing).
+package main
+
+import (
+	"flag"
+	"log"
+	"runtime"
+	"time"
+	"unsafe"
+
+	"github.com/freethought78/eris/prototype/stream/internal/mono"
+	"github.com/freethought78/eris/prototype/stream/internal/stamp"
+	"github.com/veandco/go-sdl2/sdl"
+)
+
+func init() { runtime.LockOSThread() }
+
+var (
+	x    = flag.Int("x", 0, "window x (the barcode must sit at the capture region's top-left)")
+	y    = flag.Int("y", 0, "window y")
+	w    = flag.Int("w", stamp.Bits*stamp.Block, "window width")
+	h    = flag.Int("h", stamp.Block, "window height")
+	busy = flag.Bool("busy", false, "fill the window with moving content")
+	fps  = flag.Int("fps", 60, "redraw rate")
+	top  = flag.Bool("top", false, "keep the window above others (for use over a game)")
+)
+
+const noiseSize = 512
+
+func main() {
+	flag.Parse()
+	if err := sdl.Init(sdl.INIT_VIDEO); err != nil {
+		log.Fatal(err)
+	}
+	defer sdl.Quit()
+	flags := uint32(sdl.WINDOW_SHOWN | sdl.WINDOW_BORDERLESS)
+	if *top {
+		flags |= sdl.WINDOW_ALWAYS_ON_TOP
+	}
+	win, err := sdl.CreateWindow("ptclock", int32(*x), int32(*y), int32(*w), int32(*h), flags)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer win.Destroy()
+	ren, err := sdl.CreateRenderer(win, -1, 0)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer ren.Destroy()
+
+	var bg, noise *sdl.Texture
+	var noisePix []byte
+	if *busy {
+		// A wide colour pattern, scrolled every frame: whole-screen motion.
+		bw, bh := *w*2, *h
+		pix := make([]byte, bw*bh*4)
+		for j := 0; j < bh; j++ {
+			for i := 0; i < bw; i++ {
+				o := (j*bw + i) * 4
+				pix[o] = byte(i * 3)
+				pix[o+1] = byte(j*2 + i/7)
+				pix[o+2] = byte((i ^ j) * 5)
+				pix[o+3] = 255
+			}
+		}
+		if bg, err = ren.CreateTexture(sdl.PIXELFORMAT_ABGR8888, sdl.TEXTUREACCESS_STATIC, int32(bw), int32(bh)); err != nil {
+			log.Fatal(err)
+		}
+		_ = bg.Update(nil, unsafe.Pointer(&pix[0]), bw*4)
+		// A noise patch, new every frame: detail the encoder can't predict.
+		if noise, err = ren.CreateTexture(sdl.PIXELFORMAT_ABGR8888, sdl.TEXTUREACCESS_STREAMING, noiseSize, noiseSize); err != nil {
+			log.Fatal(err)
+		}
+		noisePix = make([]byte, noiseSize*noiseSize*4)
+	}
+
+	tick := time.NewTicker(time.Second / time.Duration(*fps))
+	defer tick.Stop()
+	var seed uint64 = 88172645463325252
+	for n := 0; ; n++ {
+		for ev := sdl.PollEvent(); ev != nil; ev = sdl.PollEvent() {
+			if _, ok := ev.(*sdl.QuitEvent); ok {
+				return
+			}
+		}
+		ren.SetDrawColor(0, 0, 0, 255)
+		ren.Clear()
+		if *busy {
+			off := int32((n * 8) % *w)
+			_ = ren.Copy(bg, &sdl.Rect{X: off, Y: 0, W: int32(*w), H: int32(*h)}, nil)
+			for i := 0; i+8 <= len(noisePix); i += 8 {
+				seed ^= seed << 13
+				seed ^= seed >> 7
+				seed ^= seed << 17
+				*(*uint64)(unsafe.Pointer(&noisePix[i])) = seed | 0xff000000ff000000
+			}
+			_ = noise.Update(nil, unsafe.Pointer(&noisePix[0]), noiseSize*4)
+			nx := int32(*w/2-noiseSize/2) + int32((n*5)%200)
+			_ = ren.Copy(noise, nil, &sdl.Rect{X: nx, Y: int32(*h/2 - noiseSize/2), W: noiseSize, H: noiseSize})
+		}
+		// The barcode, drawn last and stamped as late as possible.
+		word := stamp.Encode(mono.Now())
+		for i := 0; i < stamp.Bits; i++ {
+			if word&(1<<(stamp.Bits-1-i)) != 0 {
+				ren.SetDrawColor(255, 255, 255, 255)
+			} else {
+				ren.SetDrawColor(0, 0, 0, 255)
+			}
+			_ = ren.FillRect(&sdl.Rect{X: int32(i * stamp.Block), Y: 0, W: stamp.Block, H: stamp.Block})
+		}
+		ren.Present()
+		<-tick.C
+	}
+}
