@@ -219,9 +219,14 @@ no buffer (some traffic policers work this way) drops the end of every burst
 at any bitrate, so before pacing that link showed nothing at all.
 
 - **When:** only once lost packets are bunched at the ends of frames (at least
-  20 losses, three quarters or more in the second half of their frames, or
-  frames that arrived cut short). Random loss falls evenly, so it never turns
-  pacing on, and neither does jitter.
+  30 losses, 90% or more in the second half of their frames, or frames that
+  arrived cut short). Random loss falls evenly, so it doesn't turn pacing on,
+  and neither does jitter. (At first the bar was 20 losses and 75%; 1% random
+  loss once showed 16 of 20 by chance. Real burst-cutting links show 22 of 22
+  to 34 of 34.)
+- **Then:** the rate goes straight to 75% of the measured link speed (an
+  ordinary cut steps down at most half at a time), and auto-quality cuts
+  whenever it goes back over that.
 - **How fast:** 1.25 times the link speed, measured from how spread out each
   frame arrives at the player. At or above the link's speed, pacing costs no
   delay: the link couldn't deliver the frame any sooner. Auto-quality keeps
@@ -233,8 +238,8 @@ at any bitrate, so before pacing that link showed nothing at all.
 | Network | Pacing | Shown fps | Frames lost | Screen to screen, median / p95 |
 |---|---|---|---|---|
 | 6 Mbps link, 5 ms buffer, before pacing | n/a | 0 | all | |
-| 6 Mbps link, 5 ms buffer | on after about 1 s | 60 | 39 (2%), most before it came on | 63 / 70 |
-| 10 Mbps link, 5 ms buffer | on after about 1 s | 60 | 22, all before it came on | 65 / 72 |
+| 6 Mbps link, 5 ms buffer | on after about 1 s | 60 | 39–70 over 30 s, about 45 of them in the first 2 s | 58 / 65 |
+| 10 Mbps link, 5 ms buffer | on after about 1 s | 60 | 22–40, all in the first 2 s | 51 / 60 |
 | Link drops 12 → 5 Mbps (50 ms buffer) | on during the drop, off 10 s after it recovers | 59 | 53 | 60 / 69 |
 | Clean, 1% loss, Wi-Fi, 8 Mbps with normal and deep buffers | stays off | as before | 0 | as before |
 
@@ -254,8 +259,8 @@ at any bitrate, so before pacing that link showed nothing at all.
   link fell from 104–140 to 39, damaged frames from 800–1,300 to about 200, and
   the video's share of the stream rose from about half to about 80%.
 - **The first 2 s are the weak spot.** The stream starts at full rate with no
-  pacing, so on such a link most frames in the first second or two are lost
-  until enough losses show the pattern.
+  pacing, so on such a link most frames in the first second or so are lost
+  until enough losses show the pattern. See "A better start" below.
 - **Sleeps had to be precise.** Go's own sleep wakes up to 1 ms late on this
   machine (0.3 ms took 1.1 ms, 1.3 ms took 2.1 ms), which sends paced packets in
   clumps. The sender uses the system's nanosleep instead (about 60 µs late), on
@@ -263,15 +268,46 @@ at any bitrate, so before pacing that link showed nothing at all.
   slow links space packets like real ones. Windows will need a
   high-resolution waitable timer for the same. Sleeps under 0.1 ms are skipped.
 
+## A better start on links that cut bursts (2026-11-25)
+
+On such a link the first second or two loses most frames: about 45 frames in
+the first 2 s on the 6 Mbps test link, about 35 on the 10 Mbps one (3 runs
+each). The stream starts at full rate, unpaced, and the link drops most of
+every frame until pacing is on and the rate fits. Tried:
+
+- **Pacing from the first link readings.** Frames agree closely about a real
+  bottleneck's speed and scatter when the reading is jitter. The median
+  scatter (spread between quartiles over the median) was 0.08–0.15 on 6 and
+  8 Mbps bottlenecks, paced or not, and 0.5–1.2 on Wi-Fi, jitter and fast
+  links. Pacing as soon as three readings agreed (about 0.3 s in) cut the
+  start loss by about a quarter (27–44 frames instead of 45–47). But on Wi-Fi
+  over an 8 Mbps link, jitter still let it through, pacing came on at below
+  the link's speed, and the stream ran at 4.3–4.5 Mbps for the whole session
+  instead of 6.0–6.4. Not kept: a lasting cost on a common link for a small
+  gain at the start of a rare one.
+- **Fitting the rate to the link the moment pacing starts,** instead of
+  stepping down. Kept, since it's what should happen, but it made no
+  measurable difference to the start: most frames are lost before anything
+  can be known about the link.
+
+Kept from this round, as they fix real faults: auto-quality now keeps under
+75% of a paced link's speed (it had only cut when over 100%, so it could sit
+at the link's full speed and overflow), the stricter end-of-frame test, and
+the recovery packets planning for at most 1% loss instead of none on a paced
+link (so some random loss is still covered).
+
+**Decided: keep the full-rate start.** Starting every stream more cautiously
+(a lower rate for the first second or so, or paced until measured) would
+protect these links, but would cost every other link a softer or slightly
+later first second. These links are rare, and the loss is limited to the
+moment the player's window opens.
+
 ## Next
 
 1. A run on the real monitors with a game, controller in hand. Also checks
    whether NVENC follows the bitrate on real game content.
-2. A better start on links that cut bursts short (the first 2 s, see pacing
-   above): for example, start paced at a moderate rate until the link has been
-   measured.
-3. Cross-machine runs: needs the two clocks lined up for the stage figures
+2. Cross-machine runs: needs the two clocks lined up for the stage figures
    (auto-quality doesn't need it).
-4. Windows host: `ddagrab` capture, ViGEm controller.
-5. Showing frames straight from the graphics card instead of copying them back
+3. Windows host: `ddagrab` capture, ViGEm controller.
+4. Showing frames straight from the graphics card instead of copying them back
    to memory (saves a few ms on the player side).

@@ -19,6 +19,9 @@
 // to that would add delay. So pacing only starts on evidence that the link
 // drops bursts: lost packets bunched at the ends of frames (Tail). Random
 // loss falls evenly across a frame; a small buffer overflows at the end.
+// (Frames do agree closely about a real bottleneck's speed and scatter on
+// jitter, but pacing on that alone cost 30% of the bitrate on Wi-Fi over a
+// slow link for little gain; see the README.)
 package pace
 
 import (
@@ -77,11 +80,12 @@ func (t *Tail) Lost(i, n int) {
 }
 
 // Bursty says whether losses look like a link dropping the ends of bursts:
-// enough of them, and at least three quarters in the second half of frames.
-// Random loss splits about evenly.
+// at least 30 of them, 90% or more in the second half of frames. Random loss
+// splits about evenly (1% random loss once showed 16 of 20 by chance); links
+// that cut bursts showed 22 of 22 to 27 of 27.
 func (t Tail) Bursty() bool {
 	n := t.Early + t.Late
-	return n >= 20 && t.Late*4 >= n*3
+	return n >= 30 && t.Late*10 >= n*9
 }
 
 // Take returns the median speed of the frames measured since the last call,

@@ -293,13 +293,16 @@ affects its own frame, and nothing has to wait for it. The player path keeps it 
    The sign is lost packets bunched at the ends of frames; random loss falls evenly. Once
    seen, the host spreads each frame's packets at 1.25 times the link speed, measured from
    how spread out frames arrive. That costs no delay, since the link can't deliver faster,
-   and auto-quality keeps the stream under 75% of that speed. Pacing isn't used otherwise,
+   and auto-quality goes straight to 75% of that speed, then stays under it. Pacing isn't used otherwise,
    because jitter also spreads frames out and would read as a slow link. On such a link,
-   loss is our own overflow, so it doesn't grow the recovery packets. Pacing turns off
+   loss is mostly our own overflow, so the recovery packets plan for at most 1%. Pacing turns off
    again once the link measures far faster than the stream (more than 4 times, for 10 s).
    Pacing needs sleeps accurate to well under a millisecond: Go's own are up to 1 ms late,
    so the helper uses the system's (nanosleep on Linux; a high-resolution waitable timer
-   on Windows, still to do).
+   on Windows, still to do). The cost that remains on such a link is the start: the stream
+   begins at full rate, unpaced, so the first half second or so is lost before the losses
+   show the pattern. Kept that way on purpose: a cautious start would cost every other
+   link a softer first second to protect a rare one.
 
 Same idea as the controller channel, where every packet carries the full state so a lost
 one is simply replaced by the next.

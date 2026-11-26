@@ -305,10 +305,11 @@ func (s *session) readRTCP(sender *webrtc.RTPSender, video bool) {
 						fl = 0 // the link overflowing, not random loss: don't add to it
 					}
 					if s.pacing {
-						// A link that cuts bursts loses our own overflow, and
-						// more recovery packets only add to it (they cost up to
-						// 80% of the bitrate there for little gain).
-						fl = 0
+						// On a link that cuts bursts, most loss is our own
+						// overflow, and more recovery packets only add to it
+						// (they reached 80% of the bitrate). Plan for at most
+						// 1% random loss.
+						fl = min(fl, 0.01)
 					}
 					// Rise at once, fall back gradually (about 30% a second).
 					s.lossEst = max(fl, s.lossEst*0.7)
@@ -643,14 +644,24 @@ func (s *session) feedback(b []byte) {
 	}
 	s.pacer.Report(float64(fb.LinkKbps))
 	// Pace only once losses show the link drops the ends of bursts (see
-	// package pace); otherwise jitter could pass for a slow link. Judged
-	// over about two seconds of reports.
+	// package pace); a link-speed reading alone could be jitter.
 	s.tail.Early += int(fb.EarlyN)
 	s.tail.Late += int(fb.LateN)
-	if s.tail.Bursty() && !s.pacing {
+	if !s.pacing && s.tail.Bursty() {
 		s.pacing = true
-		s.fastSince = 0
 		log.Printf("pacing on: %d of %d lost packets were in the second half of their frames", s.tail.Late, s.tail.Early+s.tail.Late)
+		s.fastSince = 0
+		if *auto {
+			before := s.ctl.Kbps()
+			if changed, why := s.ctl.FitLink(time.Unix(0, now), float64(fb.LinkKbps)); changed {
+				log.Printf("auto-quality: %.1f -> %.1f Mbps: %s", float64(before)/1000, float64(s.ctl.Kbps())/1000, why)
+				s.videoKbps = int(float64(s.ctl.Kbps()) / (1 + s.overhead))
+				s.lastSet = now
+				if s.enc != nil {
+					s.enc.SetKbps(s.videoKbps)
+				}
+			}
+		}
 	}
 	// Off again once the link measures far faster than the stream for a
 	// while (it had dropped and has recovered): a frame then fits whatever
@@ -695,7 +706,7 @@ func (s *session) feedback(b []byte) {
 
 // linkForRate is the measured link speed auto-quality may cap the rate at:
 // only on a link that drops bursts (where it's the one thing that tells the
-// link's limit) and only when trusted there.
+// link's limit).
 func (s *session) linkForRate(fb sig.Feedback) float64 {
 	if !s.pacing {
 		return 0

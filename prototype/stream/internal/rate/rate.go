@@ -65,10 +65,10 @@ const (
 	holdMax     = 60 * time.Second
 	raiseFail   = 10 * time.Second // a cut this soon after a raise means it failed
 	deliverWin  = 500 * time.Millisecond
-	shortfall   = 0.8         // delivered under this share of sent: the link is dropping
-	linkShare   = 0.75        // stay under this share of the measured link speed (only given on links that drop bursts, where frames sent close together still overflow)
-	linkOver    = time.Second // over the link speed this long: cut to linkShare of it
-	thaw        = time.Second // after a stall, what piled up arrives in a rush; don't judge rates
+	shortfall   = 0.8                    // delivered under this share of sent: the link is dropping
+	linkShare   = 0.75                   // stay under this share of the measured link speed (only given on links that drop bursts, where frames sent close together still overflow)
+	linkOver    = 300 * time.Millisecond // over the link speed this long: cut to linkShare of it
+	thaw        = time.Second            // after a stall, what piled up arrives in a rush; don't judge rates
 )
 
 // Controller decides the bitrate. Use from one goroutine.
@@ -108,6 +108,28 @@ func (c *Controller) Congested(now time.Time) bool {
 		return true
 	}
 	return false
+}
+
+// FitLink cuts at once to the share of the link speed kept to on a paced
+// link, if the rate is above it (used when pacing starts, so the stream
+// doesn't keep overflowing the link while the usual checks catch up).
+func (c *Controller) FitLink(now time.Time, link float64) (bool, string) {
+	if link <= 0 {
+		return false, ""
+	}
+	c.link = link
+	if float64(c.rate) <= 1.05*linkShare*link {
+		return false, ""
+	}
+	// Straight there: unlike an ordinary cut, the link's speed is known, so
+	// there's no need to step down at most half at a time.
+	c.calmSince, c.raises = time.Time{}, 0
+	if !c.set(int(linkShare*link), now) {
+		return false, ""
+	}
+	c.lastCut = now
+	c.holdUntil = now.Add(c.hold)
+	return true, fmt.Sprintf("pacing started on a %.1f Mbps link", link/1000)
 }
 
 // Kbps is the current total rate.
@@ -196,10 +218,11 @@ func (c *Controller) Update(r Report) (bool, string) {
 		}
 	}
 
-	// At or over the link's measured speed: the link may hide it for a while
-	// (a deep buffer fills, or recovery packets cover the drops), but it
-	// can't last. Cut to just under it.
-	if c.link > 0 && float64(c.rate) > c.link {
+	// Over the share of the link's measured speed we keep to: the link may
+	// hide it for a while (a deep buffer fills, or recovery packets cover the
+	// drops), but frames sent close together overflow a small buffer. Cut to
+	// the share.
+	if c.link > 0 && float64(c.rate) > 1.05*linkShare*c.link {
 		if c.overSince.IsZero() {
 			c.overSince = now
 		}

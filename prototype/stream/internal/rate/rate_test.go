@@ -176,3 +176,13 @@ func TestWiFiSpikeIsNotCongestion(t *testing.T) {
 		}
 	}
 }
+
+func TestFitLink(t *testing.T) {
+	c := New(cfg)
+	if changed, _ := c.FitLink(time.Unix(1000, 0), 6000); !changed || c.Kbps() != 4500 {
+		t.Fatalf("fitting 12000 to a 6000 kbps link gave %d", c.Kbps())
+	}
+	if changed, _ := c.FitLink(time.Unix(1001, 0), 6000); changed {
+		t.Fatal("cut again when already under the link")
+	}
+}

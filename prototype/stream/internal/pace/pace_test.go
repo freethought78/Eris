@@ -86,7 +86,7 @@ func TestTail(t *testing.T) {
 	rng := rand.New(rand.NewPCG(9, 9))
 	for k := 0; k < 200; k++ {
 		random.Lost(rng.IntN(25), 25)
-		bursty.Lost(18+rng.IntN(7), 25) // the last packets of each frame
+		bursty.Lost(13+rng.IntN(12), 25) // the last packets of each frame
 	}
 	if random.Bursty() || !bursty.Bursty() {
 		t.Fatalf("random %+v bursty? %v; tail %+v bursty? %v", random, random.Bursty(), bursty, bursty.Bursty())
