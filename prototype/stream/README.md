@@ -5,7 +5,7 @@ Tests the Play Together video path end to end, to see how low the delay can go
 
 | Program | Role |
 |---|---|
-| `ptsend` | Host. Captures a screen region (x11grab) and encodes with NVENC using low-latency settings, inside the program with FFmpeg's libraries. Sends each frame over WebRTC (Pion) the moment it's encoded, followed by recovery packets sized to the loss the player reports (`-fec auto`, `off` or a fixed percentage). Never re-sends. Auto-quality follows what the player's connection carries (`-auto`, `-target`, `-min-kbps`, `-max-kbps`; `-kbps` is the starting rate). Makes a keyframe when the player has nothing to show, and applies controller input to a virtual Xbox 360 pad (`-pad`). `-pipeline ffmpeg` uses the `ffmpeg` program instead (also allows `-encoder x264`). |
+| `ptsend` | Host. Captures a screen region (x11grab) and encodes with NVENC using low-latency settings, inside the program with FFmpeg's libraries. Sends each frame over WebRTC (Pion) the moment it's encoded, followed by recovery packets sized to the loss the player reports (`-fec auto`, `off` or a fixed percentage). Never re-sends. Paces packets on links that drop bursts (`-pace auto`, `on`, `off`). Auto-quality follows what the player's connection carries (`-auto`, `-target`, `-min-kbps`, `-max-kbps`; `-kbps` is the starting rate). Makes a keyframe when the player has nothing to show, and applies controller input to a virtual Xbox 360 pad (`-pad`). `-pipeline ffmpeg` uses the `ffmpeg` program instead (also allows `-encoder x264`). |
 | `ptrecv` | Player's game window. Receives with no smoothing buffer and no waiting for re-sends, rebuilds lost packets from the recovery packets, decodes with NVDEC inside the program (FFmpeg's libraries), draws with SDL as soon as a frame is ready, sends the controller state over a channel that never re-sends, and reports frame timing to the host ten times a second for auto-quality. Prints the delay of each stage. `-decoder ffmpeg` uses the `ffmpeg` program instead. |
 | `ptclock` | Draws the time as a barcode at the top-left of the host's screen (`-busy` adds moving content). `ptrecv` reads it back from each frame to get the true screen-to-screen delay. `-pattern shapes` draws coloured blocks instead of the hard-edged pattern, which the encoder can squeeze to any bitrate; `-noise` sets the size of the random-noise square. |
 
@@ -161,6 +161,8 @@ well under. Starting rate 12 Mbps; `delay=15ms` each way in every row.
 | Link drops 12 → 5 Mbps at 10 s, recovers at 30 s (60 s run) | 4 | 3.4, then back to 12 | | 59 | 47 / 61 |
 | 6 Mbps link that drops bursts (5 ms buffer) | 4 | floor (1.5) | | all | |
 
+(The last row is before pacing; see the next section.)
+
 - **The link drop:** cut in the same second, back under the target in about 4 s.
   After the link recovered, the first raise came 2 s later and full quality
   12 s after that. The lost frames are all from the first second of the drop.
@@ -171,13 +173,7 @@ well under. Starting rate 12 Mbps; `delay=15ms` each way in every row.
 - **Wi-Fi stalls aren't cut for.** A stall is a gap with no packets at all; a
   full link still delivers packets steadily, just fewer of them. The backlog a
   stall leaves is let drain.
-- **Links that drop bursts are not handled yet.** The host sends each frame's
-  packets all at once. A link with almost no buffer (some traffic policers do
-  this) drops part of every frame, at any bitrate, so auto-quality cuts to the
-  floor and nothing gets through. The fix is pacing: spreading each frame's
-  packets at just above the link's speed, which costs nothing in delay because
-  the link can't deliver them any faster anyway. It needs a link-speed estimate,
-  so it's left for later.
+- **Links that drop bursts** needed pacing; see below.
 
 Found and fixed while building it:
 
@@ -216,11 +212,52 @@ About the encoder:
   game shows the same floor, auto-quality has to step the resolution or frame
   rate down instead.
 
+## Pacing (2026-11-25)
+
+The host normally sends each frame's packets all at once. A link with almost
+no buffer (some traffic policers work this way) drops the end of every burst
+at any bitrate, so before pacing that link showed nothing at all.
+
+- **When:** only once lost packets are bunched at the ends of frames (at least
+  20 losses, three quarters or more in the second half of their frames, or
+  frames that arrived cut short). Random loss falls evenly, so it never turns
+  pacing on, and neither does jitter.
+- **How fast:** 1.25 times the link speed, measured from how spread out each
+  frame arrives at the player. At or above the link's speed, pacing costs no
+  delay: the link couldn't deliver the frame any sooner. Auto-quality keeps
+  the stream under 75% of that speed on such links.
+- **Measuring the link:** the total spread of each frame (bytes after the first
+  packet / time from first to last packet), the median over a report. The gap
+  between single packets is no use: packets reach the player in clumps.
+
+| Network | Pacing | Shown fps | Frames lost | Screen to screen, median / p95 |
+|---|---|---|---|---|
+| 6 Mbps link, 5 ms buffer, before pacing | n/a | 0 | all | |
+| 6 Mbps link, 5 ms buffer | on after about 1 s | 59 | 104 (3%) | 64 / 75 |
+| 10 Mbps link, 5 ms buffer | on after about 1 s | 60 | 28, all before it came on | 59 / 66 |
+| Link drops 12 → 5 Mbps (50 ms buffer) | on during the drop | 59 | 36 | 50 / 62 |
+| Clean, 1% loss, Wi-Fi, 8 Mbps with normal and deep buffers | stays off | as before | 0 | as before |
+
+- **Two first tries didn't work.** Pacing always, from the frame spread: Wi-Fi
+  jitter spreads frames out too, so a fast link measured 13–16 Mbps, and pacing
+  to that added about 10 ms. Using the narrowest gaps between packets instead
+  (jitter only widens gaps): packets arrive in clumps, so an 8 Mbps link
+  measured at over 500 Mbps.
+- **Pacing stays on once started,** but follows the measured speed: after the
+  link-drop test recovered, it was pacing at about 1 Gbps, which is no pacing
+  in practice (frames went out within 0.3 ms).
+- **What's left on the tightest link:** recovery packets go at the end of each
+  burst, which is exactly what such a link cuts off, so they help little there
+  and still make up over half the bitrate. Mixing them into the frame, or not
+  counting end-of-frame loss as random loss, would be the next things to try.
+- Sleeps shorter than 0.2 ms are skipped (packets go slightly early instead),
+  because each one overshoots by about as much again.
+
 ## Next
 
 1. A run on the real monitors with a game, controller in hand. Also checks
    whether NVENC follows the bitrate on real game content.
-2. Pacing, for links that drop bursts (see auto-quality above).
+2. Recovery packets on links that cut bursts short (see pacing above).
 3. Cross-machine runs: needs the two clocks lined up for the stage figures
    (auto-quality doesn't need it).
 4. Windows host: `ddagrab` capture, ViGEm controller.

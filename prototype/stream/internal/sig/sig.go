@@ -109,4 +109,7 @@ type Feedback struct {
 	BehindNs int64  `json:"behind"` // median frame delay beyond the best since joining
 	MaxNs    int64  `json:"max"`    // worst frame delay beyond the best
 	GapNs    int64  `json:"gap"`    // longest time with no packet at all (a stall, not a slow link)
+	LinkKbps int64  `json:"link"`   // link speed read off how spread out frames arrive (package pace); 0 = unknown
+	EarlyN   int64  `json:"early"`  // lost video packets in the first half of their frames (pace.Tail)
+	LateN    int64  `json:"late"`   // ...and in the second half
 }

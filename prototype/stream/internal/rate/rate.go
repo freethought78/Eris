@@ -44,6 +44,7 @@ type Report struct {
 	Delivered float64       // kbps that arrived (video and recovery packets)
 	Sent      float64       // kbps the host sent over the same time
 	Gap       time.Duration // longest time with no packet arriving at all
+	Link      float64       // link speed measured from how frames arrive (package pace), kbps; 0 = unknown
 }
 
 const (
@@ -65,6 +66,8 @@ const (
 	raiseFail   = 10 * time.Second // a cut this soon after a raise means it failed
 	deliverWin  = 500 * time.Millisecond
 	shortfall   = 0.8         // delivered under this share of sent: the link is dropping
+	linkShare   = 0.75        // stay under this share of the measured link speed (only given on links that drop bursts, where frames sent close together still overflow)
+	linkOver    = time.Second // over the link speed this long: cut to linkShare of it
 	thaw        = time.Second // after a stall, what piled up arrives in a rush; don't judge rates
 )
 
@@ -83,6 +86,8 @@ type Controller struct {
 	stalled   bool
 	thawUntil time.Time
 	thawPrev  time.Duration // behind in the previous report during a thaw; -1 at its start
+	link      float64       // smoothed measured link speed, kbps
+	overSince time.Time     // when the rate went over the measured link speed
 }
 
 // New returns a controller at the starting rate.
@@ -183,6 +188,28 @@ func (c *Controller) Update(r Report) (bool, string) {
 	}
 	delivered, sent, haveRates := c.average(deliverWin)
 	target := c.cfg.Target
+	if r.Link > 0 {
+		if c.link == 0 {
+			c.link = r.Link
+		} else {
+			c.link = 0.8*c.link + 0.2*r.Link
+		}
+	}
+
+	// At or over the link's measured speed: the link may hide it for a while
+	// (a deep buffer fills, or recovery packets cover the drops), but it
+	// can't last. Cut to just under it.
+	if c.link > 0 && float64(c.rate) > c.link {
+		if c.overSince.IsZero() {
+			c.overSince = now
+		}
+		if now.Sub(c.overSince) >= linkOver {
+			c.overSince = time.Time{}
+			return c.cut(now, r.Behind, c.link*linkShare/0.85, fmt.Sprintf("the link measures %.1f Mbps", c.link/1000))
+		}
+	} else {
+		c.overSince = time.Time{}
+	}
 
 	// A link that drops what it can't carry, instead of queueing it.
 	if haveRates && sent > 0 && delivered < shortfall*sent && now.Sub(c.lastCut) >= deliverWin &&
@@ -239,9 +266,13 @@ func (c *Controller) Update(r Report) (bool, string) {
 		c.calmSince = now
 	}
 	busy := haveRates && sent >= busyShare*float64(c.rate)
-	if now.Sub(c.calmSince) >= raiseAfter && !now.Before(c.holdUntil) && busy && c.rate < c.cfg.MaxKbps {
+	ceiling := c.cfg.MaxKbps
+	if c.link > 0 {
+		ceiling = min(ceiling, int(linkShare*c.link)) // no point raising into a known limit
+	}
+	if now.Sub(c.calmSince) >= raiseAfter && !now.Before(c.holdUntil) && busy && c.rate < ceiling {
 		step := min(raiseMax, raiseStep+raiseMore*float64(c.raises))
-		if c.set(max(int(float64(c.rate)*(1+step)), c.rate+200), now) {
+		if c.set(min(ceiling, max(int(float64(c.rate)*(1+step)), c.rate+200)), now) {
 			c.raises++
 			c.lastRaise = now
 			c.calmSince = now

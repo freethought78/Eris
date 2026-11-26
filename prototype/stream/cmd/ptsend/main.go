@@ -29,6 +29,7 @@ import (
 	"github.com/freethought78/eris/prototype/stream/internal/mono"
 	"github.com/freethought78/eris/prototype/stream/internal/nal"
 	"github.com/freethought78/eris/prototype/stream/internal/netsim"
+	"github.com/freethought78/eris/prototype/stream/internal/pace"
 	"github.com/freethought78/eris/prototype/stream/internal/pad"
 	"github.com/freethought78/eris/prototype/stream/internal/rate"
 	"github.com/freethought78/eris/prototype/stream/internal/sig"
@@ -41,22 +42,23 @@ import (
 )
 
 var (
-	listen  = flag.String("listen", "127.0.0.1:7400", "address for the player to connect to")
-	display = flag.String("display", os.Getenv("DISPLAY"), "X display to capture")
-	region  = flag.String("region", "2560x1440+0+0", "capture region WxH+X+Y")
-	fps     = flag.Int("fps", 60, "capture frame rate")
-	kbps    = flag.Int("kbps", 12000, "starting bitrate, and the most auto-quality goes to unless -max-kbps")
-	auto    = flag.Bool("auto", true, "auto-quality: follow what the player's connection carries")
-	minKbps = flag.Int("min-kbps", 1500, "auto-quality's lowest bitrate (video and recovery packets)")
-	maxKbps = flag.Int("max-kbps", 0, "auto-quality's highest bitrate (0 = -kbps)")
-	target  = flag.Duration("target", 15*time.Millisecond, "auto-quality: how far frames may queue behind their best delay")
-	encoder = flag.String("encoder", "nvenc", "nvenc or x264")
-	usePad  = flag.Bool("pad", false, "plug in a virtual controller and apply the player's input")
-	stun    = flag.String("stun", "", "optional STUN server, e.g. stun:stun.l.google.com:19302")
-	netSim  = flag.String("net", "", "simulate a bad network for what the host sends, e.g. delay=20ms,jitter=5ms,loss=1%,burst=2,kbps=20000 (see netsim)")
-	kbpsAt  = flag.String("kbps-at", "", "for testing the encoder: change the bitrate at set times, e.g. 5s:4000,10s:12000")
-	fecMode = flag.String("fec", "auto", "recovery packets: auto (follow the player's reported loss), off, or a fixed percentage such as 20")
-	pipe    = flag.String("pipeline", "lib", "lib: capture and encode with FFmpeg's libraries in this program (NVENC only); ffmpeg: run the ffmpeg program (for comparison)")
+	listen   = flag.String("listen", "127.0.0.1:7400", "address for the player to connect to")
+	display  = flag.String("display", os.Getenv("DISPLAY"), "X display to capture")
+	region   = flag.String("region", "2560x1440+0+0", "capture region WxH+X+Y")
+	fps      = flag.Int("fps", 60, "capture frame rate")
+	kbps     = flag.Int("kbps", 12000, "starting bitrate, and the most auto-quality goes to unless -max-kbps")
+	auto     = flag.Bool("auto", true, "auto-quality: follow what the player's connection carries")
+	minKbps  = flag.Int("min-kbps", 1500, "auto-quality's lowest bitrate (video and recovery packets)")
+	maxKbps  = flag.Int("max-kbps", 0, "auto-quality's highest bitrate (0 = -kbps)")
+	target   = flag.Duration("target", 15*time.Millisecond, "auto-quality: how far frames may queue behind their best delay")
+	encoder  = flag.String("encoder", "nvenc", "nvenc or x264")
+	usePad   = flag.Bool("pad", false, "plug in a virtual controller and apply the player's input")
+	stun     = flag.String("stun", "", "optional STUN server, e.g. stun:stun.l.google.com:19302")
+	netSim   = flag.String("net", "", "simulate a bad network for what the host sends, e.g. delay=20ms,jitter=5ms,loss=1%,burst=2,kbps=20000 (see netsim)")
+	kbpsAt   = flag.String("kbps-at", "", "for testing the encoder: change the bitrate at set times, e.g. 5s:4000,10s:12000")
+	paceMode = flag.String("pace", "auto", "spread each frame's packets just above the player's measured link speed: auto (once the link is seen dropping bursts), on, or off")
+	fecMode  = flag.String("fec", "auto", "recovery packets: auto (follow the player's reported loss), off, or a fixed percentage such as 20")
+	pipe     = flag.String("pipeline", "lib", "lib: capture and encode with FFmpeg's libraries in this program (NVENC only); ffmpeg: run the ffmpeg program (for comparison)")
 )
 
 var width, height, offX, offY int
@@ -147,6 +149,7 @@ func (h *host) startSession(body io.Reader) (*sig.Answer, error) {
 		ceiling = *kbps
 	}
 	s := &session{pc: pc, track: track, fecTrack: fecTrack, cancel: cancel, sim: h.sim,
+		out:       make(chan outFrame, 4),
 		ctl:       rate.New(rate.Config{StartKbps: *kbps, MinKbps: *minKbps, MaxKbps: ceiling, Target: *target}),
 		videoKbps: *kbps,
 		pkt:       rtp.NewPacketizer(1200, 0, 0, &codecs.H264Payloader{}, rtp.NewRandomSequencer(), 90000),
@@ -173,6 +176,7 @@ func (h *host) startSession(body io.Reader) (*sig.Answer, error) {
 		log.Printf("player connection: %s", st)
 		switch st {
 		case webrtc.PeerConnectionStateConnected:
+			go s.sender(ctx)
 			go s.stream(ctx)
 			go s.report(ctx)
 		case webrtc.PeerConnectionStateFailed, webrtc.PeerConnectionStateClosed,
@@ -219,6 +223,12 @@ type session struct {
 	pkt      rtp.Packetizer
 	fecSeq   uint16
 
+	out       chan outFrame
+	pacer     pace.Rate
+	paceKbps  float64      // pacing rate used for the last frame
+	tail      pace.Tail    // where lost packets were, over the last couple of seconds
+	pacing    bool         // the link has been seen dropping bursts
+	spread    stats.Series // time to send a frame's packets
 	ctl       *rate.Controller
 	videoKbps int     // what the encoder is set to
 	overhead  float64 // recovery bytes per video byte, smoothed
@@ -403,53 +413,100 @@ func (s *session) send(au []byte, key bool, capNs, encNs int64) {
 	buf = append(buf, nal.MakeSEI(capNs, encNs)...)
 	buf = append(buf, au...)
 	pkts := s.pkt.Packetize(buf, uint32(90000 / *fps))
-	var media, recovery int64
-	for _, p := range pkts {
-		if err := s.track.WriteRTP(p); err != nil {
-			log.Printf("send: %v", err)
-			return
-		}
-		media += int64(len(p.Payload) + 12)
-	}
 	// Recovery packets go right behind the frame, so a player missing some of
 	// its packets only waits for these.
-	rec, err := fec.Encode(pkts, s.parity)
+	recs, err := fec.Encode(pkts, s.parity)
 	if err != nil {
 		log.Printf("recovery packets: %v", err)
 	}
-	for i, r := range rec {
+	var rec []*rtp.Packet
+	for i, r := range recs {
 		s.fecSeq++
-		p := &rtp.Packet{Header: rtp.Header{Version: 2, SequenceNumber: s.fecSeq,
-			Timestamp: pkts[0].Timestamp, Marker: i == len(rec)-1}, Payload: r}
-		if err := s.fecTrack.WriteRTP(p); err != nil {
-			log.Printf("send recovery: %v", err)
-			break
+		rec = append(rec, &rtp.Packet{Header: rtp.Header{Version: 2, SequenceNumber: s.fecSeq,
+			Timestamp: pkts[0].Timestamp, Marker: i == len(recs)-1}, Payload: r})
+	}
+	s.out <- outFrame{media: pkts, rec: rec, key: key, size: len(buf), capNs: capNs, encNs: encNs}
+}
+
+type outFrame struct {
+	media, rec   []*rtp.Packet
+	key          bool
+	size         int
+	capNs, encNs int64
+}
+
+// sender writes frames out, spreading each frame's packets at the pacing
+// rate (package pace) so a link with almost no buffer doesn't drop the end
+// of every frame. Its own goroutine, so pacing never holds up capture.
+func (s *session) sender(ctx context.Context) {
+	for {
+		var f outFrame
+		select {
+		case <-ctx.Done():
+			return
+		case f = <-s.out:
 		}
-		recovery += int64(len(r) + 12)
+		sizes := make([]int, 0, len(f.media)+len(f.rec))
+		for _, p := range f.media {
+			sizes = append(sizes, len(p.Payload)+12)
+		}
+		for _, p := range f.rec {
+			sizes = append(sizes, len(p.Payload)+12)
+		}
+		s.mu.Lock()
+		rateKbps := 0.0
+		if *paceMode == "on" || (*paceMode == "auto" && s.pacing) {
+			rateKbps = s.pacer.Kbps(float64(s.ctl.Kbps()))
+		}
+		s.paceKbps = rateKbps
+		s.mu.Unlock()
+		when := pace.Schedule(sizes, rateKbps)
+		start := time.Now()
+		var media, recovery int64
+		for i, size := range sizes {
+			if d := time.Until(start.Add(when[i])); d >= pace.MinSleep {
+				time.Sleep(d)
+			}
+			var err error
+			if i < len(f.media) {
+				err = s.track.WriteRTP(f.media[i])
+				media += int64(size)
+			} else {
+				err = s.fecTrack.WriteRTP(f.rec[i-len(f.media)])
+				recovery += int64(size)
+			}
+			if err != nil {
+				log.Printf("send: %v", err)
+				break
+			}
+		}
+		spread := time.Since(start)
+
+		s.mu.Lock()
+		s.spread.AddNs(int64(spread))
+		s.sentBytes += media + recovery
+		if media > 0 {
+			s.overhead = 0.95*s.overhead + 0.05*float64(recovery)/float64(media)
+		}
+		s.mediaPkts += len(f.media)
+		if f.key {
+			s.keys++
+		}
+		s.fecPkts += len(f.rec)
+		s.frames++
+		s.bytes += f.size
+		if f.size > s.maxFrame {
+			s.maxFrame = f.size
+		}
+		if s.lastFrame != 0 {
+			s.encWait.AddNs(f.encNs - s.lastFrame)
+		}
+		s.lastFrame = f.encNs
+		if f.capNs != 0 {
+			s.encTime.AddNs(f.encNs - f.capNs)
+		}
+		s.mu.Unlock()
 	}
-	s.mu.Lock()
-	s.sentBytes += media + recovery
-	if media > 0 {
-		s.overhead = 0.95*s.overhead + 0.05*float64(recovery)/float64(media)
-	}
-	s.mediaPkts += len(pkts)
-	if key {
-		s.keys++
-	}
-	s.fecPkts += len(rec)
-	s.frames++
-	s.bytes += len(buf)
-	if len(buf) > s.maxFrame {
-		s.maxFrame = len(buf)
-	}
-	if s.lastFrame != 0 {
-		s.encWait.AddNs(encNs - s.lastFrame)
-	}
-	s.lastFrame = encNs
-	if capNs != 0 {
-		s.encTime.AddNs(encNs - capNs)
-	}
-	s.mu.Unlock()
 }
 
 func (s *session) streamLib(ctx context.Context) {
@@ -575,6 +632,19 @@ func (s *session) feedback(b []byte) {
 	if fb.Frames > 0 {
 		s.behind.AddNs(fb.BehindNs)
 	}
+	s.pacer.Report(float64(fb.LinkKbps))
+	// Pace only once losses show the link drops the ends of bursts (see
+	// package pace); otherwise jitter could pass for a slow link. Judged
+	// over about two seconds of reports.
+	s.tail.Early += int(fb.EarlyN)
+	s.tail.Late += int(fb.LateN)
+	if s.tail.Bursty() && !s.pacing {
+		s.pacing = true
+		log.Printf("pacing on: %d of %d lost packets were in the second half of their frames", s.tail.Late, s.tail.Early+s.tail.Late)
+	}
+	if fb.Seq%20 == 0 {
+		s.tail = pace.Tail{}
+	}
 	deliveredKbps := float64(fb.Bytes) * 8 / (float64(fb.SpanNs) / 1e9) / 1000
 	s.rcvdBytes += fb.Bytes
 	if !*auto || s.enc == nil || sentKbps == 0 {
@@ -582,7 +652,8 @@ func (s *session) feedback(b []byte) {
 	}
 	before := s.ctl.Kbps()
 	changed, why := s.ctl.Update(rate.Report{At: time.Unix(0, now), Behind: time.Duration(fb.BehindNs),
-		Frames: fb.Frames, Delivered: deliveredKbps, Sent: sentKbps, Gap: time.Duration(fb.GapNs)})
+		Frames: fb.Frames, Delivered: deliveredKbps, Sent: sentKbps, Gap: time.Duration(fb.GapNs),
+		Link: s.linkForRate(fb)})
 	if changed {
 		log.Printf("auto-quality: %.1f -> %.1f Mbps: %s", float64(before)/1000, float64(s.ctl.Kbps())/1000, why)
 	}
@@ -596,6 +667,16 @@ func (s *session) feedback(b []byte) {
 		s.lastSet = now
 		s.enc.SetKbps(video)
 	}
+}
+
+// linkForRate is the measured link speed auto-quality may cap the rate at:
+// only on a link that drops bursts (where it's the one thing that tells the
+// link's limit) and only when trusted there.
+func (s *session) linkForRate(fb sig.Feedback) float64 {
+	if !s.pacing {
+		return 0
+	}
+	return float64(fb.LinkKbps)
 }
 
 func (s *session) parseFEC() error {
@@ -670,12 +751,15 @@ func (s *session) report(ctx context.Context) {
 		log.Printf("sent %4.1f fps, %5.2f Mbps, avg frame %4.1f KB, max %5.1f KB | frame gap ms %s | "+
 			"capture->encoded ms %s | input %d pkts, send->applied ms %s | PLI %d, keyframes %d | "+
 			"player reports %.1f%% loss (planning for %.1f%%), recovery packets +%.0f%% | "+
-			"rate %.1f Mbps, video %.1f | player behind ms %s | received %.0f%% of sent%s",
+			"rate %.1f Mbps, video %.1f | player behind ms %s | received %.0f%% of sent | "+
+			"link measured %.1f Mbps, pacing %.1f Mbps, frame sent over ms %s%s",
 			float64(s.frames)/secs, float64(s.bytes)*8/secs/1e6,
 			float64(s.bytes)/float64(max(s.frames, 1))/1024, float64(s.maxFrame)/1024,
 			s.encWait.String(), s.encTime.String(), s.inputs, s.inputLat.String(), s.plis, s.keys,
 			s.lossLast*100, s.lossEst*100, 100*float64(s.fecPkts)/float64(max(s.mediaPkts, 1)),
-			float64(s.ctl.Kbps())/1000, float64(s.videoKbps)/1000, s.behind.String(), 100*float64(s.rcvdBytes)/float64(max(1, s.sentBytes-s.logSent)), s.simLine())
+			float64(s.ctl.Kbps())/1000, float64(s.videoKbps)/1000, s.behind.String(), 100*float64(s.rcvdBytes)/float64(max(1, s.sentBytes-s.logSent)),
+			s.pacer.Estimate()/1000, s.paceKbps/1000, s.spread.String(), s.simLine())
+		s.spread.Reset()
 		s.rcvdBytes, s.logSent = 0, s.sentBytes
 		s.behind.Reset()
 		s.frames, s.bytes, s.maxFrame, s.inputs, s.plis, s.fecPkts, s.mediaPkts, s.keys = 0, 0, 0, 0, 0, 0, 0, 0

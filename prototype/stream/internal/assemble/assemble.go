@@ -31,6 +31,9 @@ type Counters struct {
 	// RebuiltPkts - Ahead is the packets that really were.
 	RebuiltPkts, Ahead atomic.Int64
 	Late               atomic.Int64 // media packets for frames already finished, not counting Ahead
+	// Where in their frames lost media packets were (first or second half);
+	// see pace.Tail. Packets counted then found Ahead are taken back off.
+	LostEarly, LostLate atomic.Int64
 }
 
 // Assembler is used from one goroutine.
@@ -53,7 +56,8 @@ type Assembler struct {
 	nextSeq    uint16 // first media sequence number after the last finished frame
 	haveNext   bool
 	graceUntil time.Time
-	rebuiltSeq map[uint16]bool // recently rebuilt packets, to spot them arriving after all
+	rebuiltSeq map[uint16]bool   // recently rebuilt packets, to spot them arriving after all
+	rebuiltPos map[uint16][2]int // their position in the frame (i, n)
 }
 
 type frame struct {
@@ -102,6 +106,10 @@ func (a *Assembler) Media(p *rtp.Packet, now time.Time) {
 		if a.rebuiltSeq[p.SequenceNumber] {
 			delete(a.rebuiltSeq, p.SequenceNumber)
 			a.Cnt.Ahead.Add(1)
+			if pos, ok := a.rebuiltPos[p.SequenceNumber]; ok {
+				a.position(pos[0], pos[1], -1)
+				delete(a.rebuiltPos, p.SequenceNumber)
+			}
 		} else {
 			a.Cnt.Late.Add(1)
 		}
@@ -190,10 +198,14 @@ func (a *Assembler) complete(f *frame, oldest bool) ([]*rtp.Packet, bool) {
 				if got, ok, err := fec.Rebuild(g.h, f.ts, ms, g.parity); ok && err == nil {
 					if a.rebuiltSeq == nil || len(a.rebuiltSeq) > 4096 {
 						a.rebuiltSeq = map[uint16]bool{}
+						a.rebuiltPos = map[uint16][2]int{}
 					}
 					for _, p := range got {
 						f.media[p.SequenceNumber] = p
 						a.rebuiltSeq[p.SequenceNumber] = true
+						i := int(p.SequenceNumber - start)
+						a.rebuiltPos[p.SequenceNumber] = [2]int{i, n}
+						a.position(i, n, 1)
 					}
 					a.Cnt.RebuiltPkts.Add(int64(len(got)))
 					f.rebuilt = true
@@ -228,6 +240,15 @@ func (a *Assembler) probablyComplete(f *frame) bool {
 		lo--
 	}
 	return int(f.markerSeq-lo)+1 == len(f.media)
+}
+
+// position counts a lost packet at position i of n (or takes one back, d = -1).
+func (a *Assembler) position(i, n, d int) {
+	if 2*i < n {
+		a.Cnt.LostEarly.Add(int64(d))
+	} else {
+		a.Cnt.LostLate.Add(int64(d))
+	}
 }
 
 func (a *Assembler) finish(f *frame) {
@@ -284,6 +305,29 @@ func (a *Assembler) process(now time.Time) {
 		if Debug != nil {
 			Debug("gave up frame ts %d: %d media packets, layout %v (n=%d), fec groups %d, done %v, hopeless %v, pending %d, marker %v",
 				f.ts, len(f.media), f.layout, f.n, len(f.groups), f.fecDone, hopeless, len(a.frames), f.haveMarker)
+		}
+		switch {
+		case f.layout: // where its missing packets were
+			for i := 0; i < f.n; i++ {
+				if f.media[f.base+uint16(i)] == nil {
+					a.position(i, f.n, 1)
+				}
+			}
+		case len(f.media) > 0:
+			// No recovery packets (they travel last, so a link that cuts
+			// bursts short loses them too). If what arrived is one unbroken
+			// run with the frame's last packet missing, the end was cut off;
+			// anything else is a hole. (Its first sequence number isn't known
+			// here: the frame before may have lost its own end.)
+			lo := f.maxSeq
+			for f.media[lo-1] != nil {
+				lo--
+			}
+			if int(f.maxSeq-lo)+1 == len(f.media) && !f.haveMarker {
+				a.Cnt.LostLate.Add(1)
+			} else {
+				a.Cnt.LostEarly.Add(1)
+			}
 		}
 		a.finish(f)
 		a.Cnt.Lost.Add(1)

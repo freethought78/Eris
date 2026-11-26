@@ -31,6 +31,7 @@ import (
 	"github.com/freethought78/eris/prototype/stream/internal/avdec"
 	"github.com/freethought78/eris/prototype/stream/internal/mono"
 	"github.com/freethought78/eris/prototype/stream/internal/nal"
+	"github.com/freethought78/eris/prototype/stream/internal/pace"
 	"github.com/freethought78/eris/prototype/stream/internal/pad"
 	"github.com/freethought78/eris/prototype/stream/internal/sig"
 	"github.com/freethought78/eris/prototype/stream/internal/stamp"
@@ -112,6 +113,9 @@ type receiver struct {
 	haveBest  bool
 	lastPkt   int64 // when the last packet of either stream arrived
 	maxGap    int64
+	train     pace.Train // video packets, for the link speed
+	sentEarly int64      // loss positions already reported
+	sentLate  int64
 
 	// Frames after a lost one may show a damaged picture until a keyframe or
 	// a full intra-refresh cycle (one second) repairs it. Reader goroutine only.
@@ -455,6 +459,9 @@ func (r *receiver) readTrack(t *webrtc.TrackRemote, isFEC bool) {
 			r.maxGap = max(r.maxGap, now-r.lastPkt)
 		}
 		r.lastPkt = now
+		if !isFEC {
+			r.train.Packet(p.Timestamp, len(p.Payload)+12, time.Unix(0, now))
+		}
 		r.mu.Unlock()
 		r.rx <- rxPacket{p, isFEC}
 	}
@@ -574,7 +581,13 @@ func (r *receiver) report(dc *webrtc.DataChannel) {
 		if r.lastPkt != 0 {
 			gap = max(gap, now-r.lastPkt) // a stall still going on
 		}
-		fb := sig.Feedback{SpanNs: now - last, Bytes: r.rxBytes, Frames: len(r.fbDelays), Lost: r.fbLost, GapNs: gap}
+		fb := sig.Feedback{SpanNs: now - last, Bytes: r.rxBytes, Frames: len(r.fbDelays), Lost: r.fbLost, GapNs: gap,
+			LinkKbps: int64(r.train.Take())}
+		if r.asm != nil {
+			e, l := r.asm.Cnt.LostEarly.Load(), r.asm.Cnt.LostLate.Load()
+			fb.EarlyN, fb.LateN = e-r.sentEarly, l-r.sentLate
+			r.sentEarly, r.sentLate = e, l
+		}
 		r.maxGap = 0
 		if len(r.fbDelays) > 0 {
 			sort.Slice(r.fbDelays, func(i, j int) bool { return r.fbDelays[i] < r.fbDelays[j] })

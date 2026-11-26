@@ -129,3 +129,28 @@ func TestLossWithoutRecovery(t *testing.T) {
 		t.Fatalf("delivered %d, lost %d", d, l)
 	}
 }
+
+// A link that cuts every burst short: each frame loses its last packets and
+// its recovery packets. Losses must count as late in the frame.
+func TestCutShortFramesCountAsLate(t *testing.T) {
+	rng := rand.New(rand.NewPCG(4, 4))
+	frames := stream(rng, 100, func(k int) int { return 1 + k/5 })
+	now := time.Unix(0, 0)
+	a := &Assembler{Deliver: func([]*rtp.Packet, bool, time.Duration) {}, Lost: func() {}}
+	for _, f := range frames {
+		keep := len(f.media)
+		if keep > 6 {
+			keep = 6 // the buffer holds six packets; the rest of the burst is dropped
+		}
+		for _, p := range f.media[:keep] {
+			a.Media(p, now)
+			now = now.Add(100 * time.Microsecond)
+		}
+		now = now.Add(16 * time.Millisecond)
+		a.Tick(now)
+	}
+	early, late := a.Cnt.LostEarly.Load(), a.Cnt.LostLate.Load()
+	if late < 50 || early*4 > late {
+		t.Fatalf("lost early %d, late %d: cut-short frames not recognised", early, late)
+	}
+}
