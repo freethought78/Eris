@@ -5,6 +5,8 @@
 #   ./run-local.sh [seconds] [extra ptsend flags...]
 #   ./run-local.sh 30 -encoder x264 -kbps 8000
 #   RECV_ARGS="-hwdec none" ./run-local.sh 30     # flags for the player side
+#   NET="delay=15ms,jitter=5ms,loss=1%" ./run-local.sh 30
+#                                # simulated bad network, applied in both directions
 #
 # The host screen shows busy moving content with the timestamp barcode; the
 # encoder (NVENC by default) and the decoder (NVDEC) are real. Drawing on the
@@ -37,11 +39,13 @@ Xvfb $PLAYER_DPY -screen 0 1280x720x24 -nolisten tcp >"$LOG/xvfb-player.log" 2>&
 sleep 1
 
 DISPLAY=$HOST_DPY bin/ptclock -busy -w $W -h $H >"$LOG/ptclock.log" 2>&1 & pids+=($!)
-DISPLAY=$HOST_DPY bin/ptsend -listen 127.0.0.1:$PORT -region ${W}x${H}+0+0 "$@" >"$LOG/ptsend.log" 2>&1 & pids+=($!)
+NETARGS=()
+if [ -n "${NET:-}" ]; then NETARGS=(-net "$NET"); fi
+DISPLAY=$HOST_DPY bin/ptsend -listen 127.0.0.1:$PORT -region ${W}x${H}+0+0 "${NETARGS[@]}" "$@" >"$LOG/ptsend.log" 2>&1 & pids+=($!)
 sleep 1
 
 echo "Running for $SECS s (logs in $LOG) ..."
-DISPLAY=$PLAYER_DPY bin/ptrecv -connect http://127.0.0.1:$PORT -seconds "$SECS" -fake-input -quiet ${RECV_ARGS:-}
+DISPLAY=$PLAYER_DPY bin/ptrecv -connect http://127.0.0.1:$PORT -seconds "$SECS" -fake-input -quiet "${NETARGS[@]}" ${RECV_ARGS:-}
 echo
 echo "Host side (last report):"
 grep "sent " "$LOG/ptsend.log" | tail -1 | sed 's/^/  /'

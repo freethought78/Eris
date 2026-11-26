@@ -10,6 +10,7 @@ import (
 
 // Types used here.
 const (
+	TypeIDR = 5
 	TypeSEI = 6
 	TypeSPS = 7
 	TypePPS = 8

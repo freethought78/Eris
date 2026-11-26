@@ -3,33 +3,69 @@
 package sig
 
 import (
+	"log"
+
+	"github.com/freethought78/eris/prototype/stream/internal/netsim"
+	"github.com/pion/ice/v4"
 	"github.com/pion/interceptor"
 	"github.com/pion/webrtc/v4"
 )
 
-// Codec is the only video codec either side offers.
+// Codec is the only video codec either side offers. The player can ask for a
+// keyframe (PLI) but never for a re-send: waiting for one costs a round trip
+// (DESIGN.md 5.6).
 var Codec = webrtc.RTPCodecCapability{
-	MimeType:    webrtc.MimeTypeH264,
-	ClockRate:   90000,
-	SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=640032",
-	RTCPFeedback: []webrtc.RTCPFeedback{
-		{Type: "nack"}, {Type: "nack", Parameter: "pli"},
-	},
+	MimeType:     webrtc.MimeTypeH264,
+	ClockRate:    90000,
+	SDPFmtpLine:  "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=640032",
+	RTCPFeedback: []webrtc.RTCPFeedback{{Type: "nack", Parameter: "pli"}},
 }
 
-// NewAPI builds a WebRTC API with just our codec and the default interceptors
-// (packet-loss reports, re-send requests, statistics).
-func NewAPI() (*webrtc.API, error) {
+// FECCodec is the recovery-packet stream (package fec), sent alongside the
+// video. Only Eris understands it.
+var FECCodec = webrtc.RTPCodecCapability{MimeType: "video/x-eris-fec", ClockRate: 90000}
+
+// Payload types for the two streams.
+const (
+	PayloadVideo = 102
+	PayloadFEC   = 120
+)
+
+// NewAPI builds a WebRTC API with just our codecs and loss reports (RTCP
+// sender and receiver reports), without re-sends. If netProfile is set
+// (see netsim.Parse), everything this side sends goes through a simulated bad
+// network; the returned Net has its counters.
+func NewAPI(netProfile string) (*webrtc.API, *netsim.Net, error) {
 	m := &webrtc.MediaEngine{}
-	if err := m.RegisterCodec(webrtc.RTPCodecParameters{RTPCodecCapability: Codec, PayloadType: 102},
-		webrtc.RTPCodecTypeVideo); err != nil {
-		return nil, err
+	for _, c := range []webrtc.RTPCodecParameters{
+		{RTPCodecCapability: Codec, PayloadType: PayloadVideo},
+		{RTPCodecCapability: FECCodec, PayloadType: PayloadFEC},
+	} {
+		if err := m.RegisterCodec(c, webrtc.RTPCodecTypeVideo); err != nil {
+			return nil, nil, err
+		}
 	}
 	ir := &interceptor.Registry{}
-	if err := webrtc.RegisterDefaultInterceptors(m, ir); err != nil {
-		return nil, err
+	if err := webrtc.ConfigureRTCPReports(ir); err != nil {
+		return nil, nil, err
 	}
-	return webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithInterceptorRegistry(ir)), nil
+	opts := []func(*webrtc.API){webrtc.WithMediaEngine(m), webrtc.WithInterceptorRegistry(ir)}
+	var sim *netsim.Net
+	if netProfile != "" {
+		p, err := netsim.Parse(netProfile)
+		if err != nil {
+			return nil, nil, err
+		}
+		if sim, err = netsim.New(p); err != nil {
+			return nil, nil, err
+		}
+		var se webrtc.SettingEngine
+		se.SetNet(sim)
+		se.SetICEMulticastDNSMode(ice.MulticastDNSModeDisabled)
+		opts = append(opts, webrtc.WithSettingEngine(se))
+		log.Printf("simulated network for what this side sends: %s", p)
+	}
+	return webrtc.NewAPI(opts...), sim, nil
 }
 
 // ICEServers turns an optional STUN URL into a server list.

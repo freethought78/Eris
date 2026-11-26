@@ -246,13 +246,41 @@ play. The streamer can revoke a slot at any time.
 | Capture | Encode each frame the moment it arrives; capture at the monitor's full refresh rate |
 | Encode | Settings in 5.1 |
 | Network | Direct connection, no relay hop; UDP so a lost packet never blocks the next frame |
-| Loss | Forward error correction instead of waiting for re-sends where possible |
+| Loss | Recovery packets on every frame; never wait for a re-send (5.6) |
 | Playback | No smoothing buffer; frames are shown as soon as they're decoded |
 | Decode and display | Hardware decode, drawn straight to the game window |
 | Controller | Read natively at 1000 Hz; every packet carries the full controller state over a channel that never re-sends, so a lost packet costs nothing |
 
 **Target:** player's button-to-screen delay = network round trip + 40 ms or less. Measured
 with an on-screen frame timestamp, host screen to player screen.
+
+### 5.6 Packet loss
+
+UDP doesn't lose fewer packets than TCP. What it changes is that a lost packet only
+affects its own frame, and nothing has to wait for it. The player path keeps it that way:
+
+1. **No re-sends.** Waiting for a lost packet costs a full round trip, so the player's
+   stream doesn't ask for them.
+2. **Recovery packets (forward error correction).** The host sends a few extra packets
+   after each frame. The player can rebuild that many lost packets from them without
+   waiting. When nothing is lost they are ignored, so they add no delay; when something
+   is lost, the wait is only the time those extra packets take to arrive (well under
+   2 ms on a normal upload). They cost bandwidth, so the amount follows the loss the
+   player reports: next to none on a clean connection, more when loss appears.
+3. **If a frame still can't be rebuilt**, the player shows the next one and intra refresh
+   repairs the picture within a second. It asks for a full keyframe only when it has
+   nothing to show at all (on joining, for example). Phase 0 measured keyframes after
+   every loss as worse: they are about four times the size of a normal frame, so the
+   next loss is more likely to hit them.
+4. **Auto-quality (5.1) keeps the stream below the link's speed**, so the link itself
+   doesn't start dropping packets.
+
+Same idea as the controller channel, where every packet carries the full state so a lost
+one is simply replaced by the next.
+
+**Watchers are different.** They go through LiveKit and aren't playing, so a small
+buffer and normal re-sends are fine for them. Their picture can be a few tens of
+milliseconds behind without anyone noticing.
 
 ---
 

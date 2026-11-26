@@ -22,11 +22,11 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
-	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/freethought78/eris/prototype/stream/internal/assemble"
 	"github.com/freethought78/eris/prototype/stream/internal/avdec"
 	"github.com/freethought78/eris/prototype/stream/internal/mono"
 	"github.com/freethought78/eris/prototype/stream/internal/nal"
@@ -34,6 +34,7 @@ import (
 	"github.com/freethought78/eris/prototype/stream/internal/sig"
 	"github.com/freethought78/eris/prototype/stream/internal/stamp"
 	"github.com/freethought78/eris/prototype/stream/internal/stats"
+	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
 	"github.com/pion/rtp/codecs"
 	"github.com/pion/webrtc/v4"
@@ -57,6 +58,8 @@ var (
 	decArgs = flag.String("decargs", "", "extra FFmpeg decoder input options, comma-separated, e.g. -threads,1 (for experiments)")
 	noAUD   = flag.Bool("no-aud", false, "don't end each frame with a delimiter (for experiments)")
 	decoder = flag.String("decoder", "lib", "lib: FFmpeg's libraries inside this program; ffmpeg: the ffmpeg program (for comparison)")
+	recov   = flag.String("recover", "refresh", "after a lost frame: refresh = let intra refresh repair the picture over a second; key = ask the host for a keyframe")
+	netSim  = flag.String("net", "", "simulate a bad network for what the player sends, e.g. delay=20ms,loss=1% (see netsim)")
 )
 
 // Our own virtual pad (ptsend -pad) uses this product version; never read it
@@ -74,6 +77,15 @@ type frame struct {
 
 type receiver struct {
 	w, h int
+	fps  int
+	pc   *webrtc.PeerConnection
+	ssrc uint32
+
+	// keyframe requests; reader goroutine only
+	lastKeyReq int64
+	keyReqs    int
+	pictures   bool // the decoder has produced a picture
+	noPicture  int  // frames in a row that gave no picture
 
 	dec    io.WriteCloser // -decoder ffmpeg
 	lib    *avdec.Decoder // -decoder lib
@@ -85,12 +97,22 @@ type receiver struct {
 	wake   uint32
 
 	// counters, guarded by mu
-	rxFrames, dropped, lateRTP int
+	rxFrames, dropped, damaged int
+	rebuildWait                stats.Series // last media packet -> frame rebuilt
+
+	rx  chan rxPacket
+	asm *assemble.Assembler
+
+	// Frames after a lost one may show a damaged picture until a keyframe or
+	// a full intra-refresh cycle (one second) repairs it. Reader goroutine only.
+	damageLeft int
 }
 
 type run struct {
 	capWait, encode, capEnc, network, decode, present, total, atDecode stats.Series
-	shown, decoded, stampFail                                          int
+	gaps                                                               stats.Series // between frames shown
+	shown, decoded, stampFail, stalls                                  int
+	lastShown                                                          int64
 }
 
 func main() {
@@ -101,7 +123,7 @@ func main() {
 	}
 	defer sdl.Quit()
 
-	api, err := sig.NewAPI()
+	api, sim, err := sig.NewAPI(*netSim)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -110,9 +132,11 @@ func main() {
 		log.Fatal(err)
 	}
 	defer pc.Close()
-	if _, err := pc.AddTransceiverFromKind(webrtc.RTPCodecTypeVideo,
-		webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionRecvonly}); err != nil {
-		log.Fatal(err)
+	for range 2 { // video, recovery packets
+		if _, err := pc.AddTransceiverFromKind(webrtc.RTPCodecTypeVideo,
+			webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionRecvonly}); err != nil {
+			log.Fatal(err)
+		}
 	}
 	unordered, noResend := false, uint16(0)
 	dc, err := pc.CreateDataChannel("input", &webrtc.DataChannelInit{Ordered: &unordered, MaxRetransmits: &noResend})
@@ -120,16 +144,25 @@ func main() {
 		log.Fatal(err)
 	}
 
-	r := &receiver{frames: make(chan *frame, 4), pool: make(chan *frame, 8), ready: make(chan struct{})}
+	r := &receiver{frames: make(chan *frame, 4), pool: make(chan *frame, 8), ready: make(chan struct{}), pc: pc}
 	r.wake = sdl.RegisterEvents(1)
-	pc.OnTrack(func(t *webrtc.TrackRemote, _ *webrtc.RTPReceiver) { go r.readVideo(t) })
+	r.rx = make(chan rxPacket, 4096)
+	pc.OnTrack(func(t *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
+		if t.Codec().MimeType == sig.FECCodec.MimeType {
+			go r.readTrack(t, true)
+			return
+		}
+		r.ssrc = uint32(t.SSRC())
+		go r.readTrack(t, false)
+	})
+	go r.assemble()
 	pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) { logf("connection: %s", s) })
 
 	ans, err := negotiate(pc)
 	if err != nil {
 		log.Fatalf("connect to %s: %v", *connect, err)
 	}
-	r.w, r.h = ans.Width, ans.Height
+	r.w, r.h, r.fps = ans.Width, ans.Height, ans.FPS
 	for i := 0; i < cap(r.pool); i++ {
 		r.pool <- &frame{data: make([]byte, r.w*r.h*3/2)}
 	}
@@ -242,6 +275,14 @@ func main() {
 				}
 				rr.shown++
 				rr.present.AddNs(shown - latest.dec)
+				if rr.lastShown != 0 {
+					gap := shown - rr.lastShown
+					rr.gaps.AddNs(gap)
+					if gap > 50*int64(time.Millisecond) {
+						rr.stalls++
+					}
+				}
+				rr.lastShown = shown
 				if latest.stampOK {
 					rr.total.AddNs(stamp.AgeNs(shown, latest.stampV))
 				}
@@ -275,6 +316,10 @@ func main() {
 	secs := time.Since(start).Seconds() - float64(*warmup)
 	fmt.Println()
 	printRun(fmt.Sprintf("SUMMARY (%.0f s after %d s warm-up)", secs, *warmup), &all, secs, r)
+	if sim != nil {
+		fmt.Printf("  player -> host packets: %d sent, %d lost, %d dropped by the slow link\n",
+			sim.Cnt.Sent.Load(), sim.Cnt.Lost.Load(), sim.Cnt.QueueDrops.Load())
+	}
 }
 
 // collect moves decode-side samples gathered by the reader goroutine into the runs.
@@ -316,11 +361,20 @@ func (r *receiver) collect(window, all *run, summaryFrom int64) {
 
 func printRun(title string, rr *run, secs float64, r *receiver) {
 	r.mu.Lock()
-	dropped, late := r.dropped, r.lateRTP
+	dropped, damaged, keyReqs := r.dropped, r.damaged, r.keyReqs
+	rw := r.rebuildWait.String()
 	r.mu.Unlock()
-	fmt.Printf("%s: shown %.1f fps, decoded %.1f fps, unreadable stamps %d, frames dropped (loss) %d, late packets %d\n",
-		title, float64(rr.shown)/secs, float64(rr.decoded)/secs, rr.stampFail, dropped, late)
+	var rebuilt, late int64
+	if r.asm != nil {
+		rebuilt, late = r.asm.Cnt.RebuiltPkts.Load()-r.asm.Cnt.Ahead.Load(), r.asm.Cnt.Late.Load()
+	}
+	fmt.Printf("%s: shown %.1f fps, decoded %.1f fps, unreadable stamps %d\n",
+		title, float64(rr.shown)/secs, float64(rr.decoded)/secs, rr.stampFail)
+	fmt.Printf("  since start: lost packets rebuilt %d, frames lost %d, frames possibly damaged %d, late packets %d, keyframe requests %d\n",
+		rebuilt, dropped, damaged, late, keyReqs)
 	fmt.Printf("  ms (median / p95 / max)\n")
+	fmt.Printf("  wait for rebuilding (from last media packet) %s\n", rw)
+	fmt.Printf("  time between frames shown            %s  (%d stalls over 50 ms)\n", rr.gaps.String(), rr.stalls)
 	fmt.Printf("  screen -> captured (incl. waiting)   %s\n", rr.capWait.String())
 	fmt.Printf("  captured -> encoded                  %s\n", rr.encode.String())
 	fmt.Printf("  screen -> encoded (capture + encode) %s\n", rr.capEnc.String())
@@ -364,58 +418,84 @@ func negotiate(pc *webrtc.PeerConnection) (*sig.Answer, error) {
 	return &ans, pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: ans.SDP})
 }
 
-// readVideo rebuilds frames from RTP packets. There is deliberately no jitter
-// buffer: a frame goes to the decoder the moment its last packet arrives. A
-// frame with a missing packet is dropped; intra refresh repairs the picture.
-func (r *receiver) readVideo(t *webrtc.TrackRemote) {
-	var cur []*rtp.Packet
-	var curTS uint32
-	var expect uint16
-	haveExpect := false
+type rxPacket struct {
+	p   *rtp.Packet
+	fec bool
+}
+
+// readTrack passes one stream's packets to the assembler goroutine.
+func (r *receiver) readTrack(t *webrtc.TrackRemote, isFEC bool) {
 	for {
 		p, _, err := t.ReadRTP()
 		if err != nil {
 			return
 		}
-		if len(cur) > 0 && p.Timestamp != curTS {
-			if int32(p.Timestamp-curTS) < 0 {
-				r.mu.Lock()
-				r.lateRTP++ // a re-sent packet for a frame already handled
-				r.mu.Unlock()
-				continue
-			}
-			r.mu.Lock()
-			r.dropped++ // previous frame never got its last packet
-			r.mu.Unlock()
-			cur = cur[:0]
-		}
-		if len(cur) == 0 {
-			curTS = p.Timestamp
-		}
-		cur = append(cur, p)
-		if !p.Marker {
-			continue
-		}
-		sort.Slice(cur, func(i, j int) bool { return int16(cur[i].SequenceNumber-cur[j].SequenceNumber) < 0 })
-		ok := true
-		for i := 1; i < len(cur); i++ {
-			if cur[i].SequenceNumber != cur[i-1].SequenceNumber+1 {
-				ok = false
-			}
-		}
-		if haveExpect && cur[0].SequenceNumber != expect {
-			ok = false
-		}
-		expect, haveExpect = cur[len(cur)-1].SequenceNumber+1, true
-		if ok {
-			r.frameReady(cur)
-		} else {
-			r.mu.Lock()
-			r.dropped++
-			r.mu.Unlock()
-		}
-		cur = nil
+		r.rx <- rxPacket{p, isFEC}
 	}
+}
+
+// assemble rebuilds frames from the video and recovery streams. There is
+// deliberately no jitter buffer and no waiting for re-sends (DESIGN.md 5.6).
+func (r *receiver) assemble() {
+	r.asm = &assemble.Assembler{
+		Deliver: func(pkts []*rtp.Packet, rebuilt bool, waited time.Duration) {
+			if rebuilt {
+				r.mu.Lock()
+				r.rebuildWait.AddNs(int64(waited))
+				r.mu.Unlock()
+			}
+			r.frameReady(pkts)
+		},
+		Lost: r.lost,
+	}
+	t := time.NewTimer(time.Hour)
+	for {
+		var tc <-chan time.Time
+		if d := r.asm.Deadline(); !d.IsZero() {
+			t.Reset(time.Until(d))
+			tc = t.C
+		}
+		select {
+		case x := <-r.rx:
+			if x.fec {
+				r.asm.FEC(x.p, time.Now())
+			} else {
+				r.asm.Media(x.p, time.Now())
+			}
+		case <-tc:
+			r.asm.Tick(time.Now())
+		}
+		if tc != nil && !t.Stop() {
+			select {
+			case <-t.C:
+			default:
+			}
+		}
+	}
+}
+
+func (r *receiver) lost() {
+	r.mu.Lock()
+	r.dropped++
+	r.mu.Unlock()
+	r.damageLeft = r.fps
+	if *recov == "key" {
+		r.askKeyframe()
+	}
+}
+
+// askKeyframe asks the host for a keyframe, at most every 100 ms (the
+// keyframe itself takes a while to arrive, and asking again won't speed it up).
+func (r *receiver) askKeyframe() {
+	now := mono.Now()
+	if now-r.lastKeyReq < 100*int64(time.Millisecond) {
+		return
+	}
+	r.lastKeyReq = now
+	r.mu.Lock()
+	r.keyReqs++
+	r.mu.Unlock()
+	_ = r.pc.WriteRTCP([]rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: r.ssrc}})
 }
 
 func (r *receiver) frameReady(pkts []*rtp.Packet) {
@@ -431,11 +511,14 @@ func (r *receiver) frameReady(pkts []*rtp.Packet) {
 	}
 	m := meta{rx: rx}
 	var out []byte
+	idr := false
 	for _, n := range nal.Split(annexB) {
 		if len(n) == 0 {
 			continue
 		}
 		switch n[0] & 0x1f {
+		case nal.TypeIDR:
+			idr = true
 		case nal.TypeAUD:
 			continue
 		case nal.TypeSEI:
@@ -447,6 +530,14 @@ func (r *receiver) frameReady(pkts []*rtp.Packet) {
 		out = append(out, 0, 0, 0, 1)
 		out = append(out, n...)
 	}
+	if idr {
+		r.damageLeft = 0
+	} else if r.damageLeft > 0 {
+		r.damageLeft--
+		r.mu.Lock()
+		r.damaged++
+		r.mu.Unlock()
+	}
 	<-r.ready
 	if r.lib != nil {
 		r.mu.Lock()
@@ -455,12 +546,23 @@ func (r *receiver) frameReady(pkts []*rtp.Packet) {
 		f := <-r.pool
 		ok, err := r.lib.Decode(out, f.data, r.w, r.h)
 		if err != nil {
-			log.Printf("%v", err)
+			logf("%v", err)
+		}
+		if ok {
+			r.noPicture = 0
+		} else {
+			r.noPicture++
+		}
+		if err != nil || (!ok && (!r.pictures || r.noPicture >= 3)) {
+			// Nothing to build on (missed the first keyframe or the
+			// parameter sets), or the decoder has stopped giving pictures.
+			r.askKeyframe()
 		}
 		if !ok {
 			r.pool <- f
 			return
 		}
+		r.pictures = true
 		f.cap, f.enc, f.rx, f.timed = m.cap, m.enc, m.rx, m.enc != 0
 		r.deliver(f)
 		return

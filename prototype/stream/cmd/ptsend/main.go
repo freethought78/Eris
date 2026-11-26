@@ -14,24 +14,29 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/freethought78/eris/prototype/stream/internal/avenc"
+	"github.com/freethought78/eris/prototype/stream/internal/fec"
 	"github.com/freethought78/eris/prototype/stream/internal/flv"
 	"github.com/freethought78/eris/prototype/stream/internal/mono"
 	"github.com/freethought78/eris/prototype/stream/internal/nal"
+	"github.com/freethought78/eris/prototype/stream/internal/netsim"
 	"github.com/freethought78/eris/prototype/stream/internal/pad"
 	"github.com/freethought78/eris/prototype/stream/internal/sig"
 	"github.com/freethought78/eris/prototype/stream/internal/stats"
 	"github.com/freethought78/eris/prototype/stream/internal/uinput"
 	"github.com/pion/rtcp"
+	"github.com/pion/rtp"
+	"github.com/pion/rtp/codecs"
 	"github.com/pion/webrtc/v4"
-	"github.com/pion/webrtc/v4/pkg/media"
 )
 
 var (
@@ -43,6 +48,8 @@ var (
 	encoder = flag.String("encoder", "nvenc", "nvenc or x264")
 	usePad  = flag.Bool("pad", false, "plug in a virtual controller and apply the player's input")
 	stun    = flag.String("stun", "", "optional STUN server, e.g. stun:stun.l.google.com:19302")
+	netSim  = flag.String("net", "", "simulate a bad network for what the host sends, e.g. delay=20ms,jitter=5ms,loss=1%,burst=2,kbps=20000 (see netsim)")
+	fecMode = flag.String("fec", "auto", "recovery packets: auto (follow the player's reported loss), off, or a fixed percentage such as 20")
 	pipe    = flag.String("pipeline", "lib", "lib: capture and encode with FFmpeg's libraries in this program (NVENC only); ffmpeg: run the ffmpeg program (for comparison)")
 )
 
@@ -54,11 +61,11 @@ func main() {
 		&width, &height, &offX, &offY); err != nil {
 		log.Fatalf("bad -region %q: want WxH+X+Y", *region)
 	}
-	api, err := sig.NewAPI()
+	api, sim, err := sig.NewAPI(*netSim)
 	if err != nil {
 		log.Fatal(err)
 	}
-	h := &host{api: api}
+	h := &host{api: api, sim: sim}
 	http.HandleFunc("/offer", h.offer)
 	log.Printf("ptsend: capturing %s %s at %d fps, %d kbps, %s; waiting for a player on http://%s",
 		*display, *region, *fps, *kbps, *encoder, *listen)
@@ -67,6 +74,7 @@ func main() {
 
 type host struct {
 	api  *webrtc.API
+	sim  *netsim.Net
 	mu   sync.Mutex
 	busy bool
 }
@@ -106,7 +114,12 @@ func (h *host) startSession(body io.Reader) (*sig.Answer, error) {
 	if err != nil {
 		return nil, err
 	}
-	track, err := webrtc.NewTrackLocalStaticSample(sig.Codec, "video", "eris")
+	track, err := webrtc.NewTrackLocalStaticRTP(sig.Codec, "video", "eris")
+	if err != nil {
+		pc.Close()
+		return nil, err
+	}
+	fecTrack, err := webrtc.NewTrackLocalStaticRTP(sig.FECCodec, "fec", "eris")
 	if err != nil {
 		pc.Close()
 		return nil, err
@@ -116,11 +129,25 @@ func (h *host) startSession(body io.Reader) (*sig.Answer, error) {
 		pc.Close()
 		return nil, err
 	}
+	fecSender, err := pc.AddTrack(fecTrack)
+	if err != nil {
+		pc.Close()
+		return nil, err
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &session{pc: pc, track: track, cancel: cancel}
+	s := &session{pc: pc, track: track, fecTrack: fecTrack, cancel: cancel, sim: h.sim,
+		pkt:     rtp.NewPacketizer(1200, 0, 0, &codecs.H264Payloader{}, rtp.NewRandomSequencer(), 90000),
+		lossEst: 0.01, // until the player's first report
+	}
+	if err := s.parseFEC(); err != nil {
+		cancel()
+		pc.Close()
+		return nil, err
+	}
 
-	go s.readRTCP(sender)
+	go s.readRTCP(sender, true)
+	go s.readRTCP(fecSender, false)
 	pc.OnDataChannel(func(dc *webrtc.DataChannel) {
 		if dc.Label() == "input" {
 			dc.OnMessage(func(m webrtc.DataChannelMessage) { s.input(m.Data) })
@@ -169,9 +196,16 @@ func (h *host) startSession(body io.Reader) (*sig.Answer, error) {
 }
 
 type session struct {
-	pc     *webrtc.PeerConnection
-	track  *webrtc.TrackLocalStaticSample
-	cancel context.CancelFunc
+	sim      *netsim.Net
+	pc       *webrtc.PeerConnection
+	track    *webrtc.TrackLocalStaticRTP
+	fecTrack *webrtc.TrackLocalStaticRTP
+	cancel   context.CancelFunc
+	pkt      rtp.Packetizer
+	fecSeq   uint16
+
+	fecAuto bool
+	fecPct  float64 // fixed percentage when not auto; 0 = off
 
 	mu        sync.Mutex
 	pad       *uinput.Pad
@@ -184,6 +218,10 @@ type session struct {
 	encWait   stats.Series // time between consecutive frames from FFmpeg
 	encTime   stats.Series // capture finished -> encoded (lib pipeline)
 	plis      int
+	lossEst   float64 // the player's recent packet loss, as reported (auto FEC)
+	lossLast  float64 // last report
+	fecPkts   int
+	mediaPkts int
 	lastFrame int64
 	enc       *avenc.Encoder // lib pipeline, for keyframe requests
 	params    []byte         // last SPS+PPS seen, Annex-B
@@ -199,13 +237,36 @@ func (s *session) closePad() {
 	}
 }
 
-func (s *session) readRTCP(sender *webrtc.RTPSender) {
+// readRTCP reads the player's reports for one stream. Only the video stream's
+// matter: its keyframe requests and its loss reports (before recovery packets
+// do their work), which size the recovery packets.
+func (s *session) readRTCP(sender *webrtc.RTPSender, video bool) {
 	for {
 		pkts, _, err := sender.ReadRTCP()
 		if err != nil {
 			return
 		}
+		if !video {
+			continue
+		}
+		var ssrc uint32
+		if enc := sender.GetParameters().Encodings; len(enc) > 0 {
+			ssrc = uint32(enc[0].SSRC)
+		}
 		for _, p := range pkts {
+			if rr, ok := p.(*rtcp.ReceiverReport); ok {
+				for _, rep := range rr.Reports {
+					if rep.SSRC != ssrc {
+						continue
+					}
+					fl := float64(rep.FractionLost) / 256
+					s.mu.Lock()
+					// Rise at once, fall back gradually (about 30% a second).
+					s.lossEst = max(fl, s.lossEst*0.7)
+					s.lossLast = fl
+					s.mu.Unlock()
+				}
+			}
 			if _, ok := p.(*rtcp.PictureLossIndication); ok {
 				s.mu.Lock()
 				s.plis++
@@ -308,10 +369,31 @@ func (s *session) send(au []byte, key bool, capNs, encNs int64) {
 	s.mu.Unlock()
 	buf = append(buf, nal.MakeSEI(capNs, encNs)...)
 	buf = append(buf, au...)
-	if err := s.track.WriteSample(media.Sample{Data: buf, Duration: time.Second / time.Duration(*fps)}); err != nil {
-		log.Printf("send: %v", err)
+	pkts := s.pkt.Packetize(buf, uint32(90000 / *fps))
+	for _, p := range pkts {
+		if err := s.track.WriteRTP(p); err != nil {
+			log.Printf("send: %v", err)
+			return
+		}
+	}
+	// Recovery packets go right behind the frame, so a player missing some of
+	// its packets only waits for these.
+	rec, err := fec.Encode(pkts, s.parity)
+	if err != nil {
+		log.Printf("recovery packets: %v", err)
+	}
+	for i, r := range rec {
+		s.fecSeq++
+		p := &rtp.Packet{Header: rtp.Header{Version: 2, SequenceNumber: s.fecSeq,
+			Timestamp: pkts[0].Timestamp, Marker: i == len(rec)-1}, Payload: r}
+		if err := s.fecTrack.WriteRTP(p); err != nil {
+			log.Printf("send recovery: %v", err)
+			break
+		}
 	}
 	s.mu.Lock()
+	s.mediaPkts += len(pkts)
+	s.fecPkts += len(rec)
 	s.frames++
 	s.bytes += len(buf)
 	if len(buf) > s.maxFrame {
@@ -416,6 +498,63 @@ func (s *session) streamFFmpeg(ctx context.Context) {
 	_ = cmd.Wait()
 }
 
+func (s *session) parseFEC() error {
+	switch *fecMode {
+	case "auto":
+		s.fecAuto = true
+	case "off":
+	default:
+		v, err := strconv.ParseFloat(strings.TrimSuffix(*fecMode, "%"), 64)
+		if err != nil || v < 0 || v > 100 {
+			return fmt.Errorf("bad -fec %q: want auto, off or a percentage", *fecMode)
+		}
+		s.fecPct = v
+	}
+	return nil
+}
+
+// parity says how many recovery packets a group of k media packets gets.
+// Auto: the fewest that leave a group unrecoverable less than once in 10,000
+// at the reported loss, doubled because real losses come in bursts. Never
+// fewer than one, which covers the odd lost packet before any report says so.
+func (s *session) parity(k int) int {
+	if !s.fecAuto {
+		return int(math.Ceil(float64(k) * s.fecPct / 100))
+	}
+	s.mu.Lock()
+	p := min(0.5, 2*s.lossEst)
+	s.mu.Unlock()
+	for m := 1; m < k; m++ {
+		if lossTail(k+m, m, p) < 1e-4 {
+			return m
+		}
+	}
+	return max(1, k)
+}
+
+// lossTail is the chance that more than m of n packets are lost, each lost
+// with chance p.
+func lossTail(n, m int, p float64) float64 {
+	if p <= 0 {
+		return 0
+	}
+	term := math.Pow(1-p, float64(n)) // exactly 0 lost
+	sum := term
+	for x := 0; x < m; x++ {
+		term *= float64(n-x) / float64(x+1) * p / (1 - p)
+		sum += term
+	}
+	return max(0, 1-sum)
+}
+
+func (s *session) simLine() string {
+	if s.sim == nil {
+		return ""
+	}
+	return fmt.Sprintf(" | simulated network so far: %d packets, %d lost, %d dropped by the slow link",
+		s.sim.Cnt.Sent.Load(), s.sim.Cnt.Lost.Load(), s.sim.Cnt.QueueDrops.Load())
+}
+
 func (s *session) report(ctx context.Context) {
 	t := time.NewTicker(2 * time.Second)
 	defer t.Stop()
@@ -428,11 +567,13 @@ func (s *session) report(ctx context.Context) {
 		s.mu.Lock()
 		secs := 2.0
 		log.Printf("sent %4.1f fps, %5.2f Mbps, avg frame %4.1f KB, max %5.1f KB | frame gap ms %s | "+
-			"capture->encoded ms %s | input %d pkts, send->applied ms %s | PLI %d",
+			"capture->encoded ms %s | input %d pkts, send->applied ms %s | PLI %d | "+
+			"player reports %.1f%% loss (planning for %.1f%%), recovery packets +%.0f%%%s",
 			float64(s.frames)/secs, float64(s.bytes)*8/secs/1e6,
 			float64(s.bytes)/float64(max(s.frames, 1))/1024, float64(s.maxFrame)/1024,
-			s.encWait.String(), s.encTime.String(), s.inputs, s.inputLat.String(), s.plis)
-		s.frames, s.bytes, s.maxFrame, s.inputs, s.plis = 0, 0, 0, 0, 0
+			s.encWait.String(), s.encTime.String(), s.inputs, s.inputLat.String(), s.plis,
+			s.lossLast*100, s.lossEst*100, 100*float64(s.fecPkts)/float64(max(s.mediaPkts, 1)), s.simLine())
+		s.frames, s.bytes, s.maxFrame, s.inputs, s.plis, s.fecPkts, s.mediaPkts = 0, 0, 0, 0, 0, 0, 0
 		s.encWait.Reset()
 		s.encTime.Reset()
 		s.inputLat.Reset()
