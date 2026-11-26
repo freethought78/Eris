@@ -29,6 +29,7 @@ import (
 
 	"github.com/freethought78/eris/prototype/stream/internal/assemble"
 	"github.com/freethought78/eris/prototype/stream/internal/avdec"
+	"github.com/freethought78/eris/prototype/stream/internal/clock"
 	"github.com/freethought78/eris/prototype/stream/internal/mono"
 	"github.com/freethought78/eris/prototype/stream/internal/nal"
 	"github.com/freethought78/eris/prototype/stream/internal/pace"
@@ -46,22 +47,27 @@ import (
 func init() { runtime.LockOSThread() } // SDL must run on the main thread
 
 var (
-	connect = flag.String("connect", "http://127.0.0.1:7400", "host address")
-	winX    = flag.Int("x", 0, "window x")
-	winY    = flag.Int("y", 0, "window y")
-	winW    = flag.Int("w", 1280, "window width")
-	winH    = flag.Int("h", 720, "window height")
-	hwdec   = flag.String("hwdec", "cuda", "FFmpeg hardware decoder (cuda, vaapi) or none")
-	fake    = flag.Bool("fake-input", false, "press A every 500 ms instead of reading a controller")
-	seconds = flag.Int("seconds", 0, "stop after this many seconds and print a summary (0 = run until closed)")
-	warmup  = flag.Int("warmup", 3, "seconds left out of the summary at the start")
-	stun    = flag.String("stun", "", "optional STUN server")
-	quiet   = flag.Bool("quiet", false, "only print the final summary")
-	decArgs = flag.String("decargs", "", "extra FFmpeg decoder input options, comma-separated, e.g. -threads,1 (for experiments)")
-	noAUD   = flag.Bool("no-aud", false, "don't end each frame with a delimiter (for experiments)")
-	decoder = flag.String("decoder", "lib", "lib: FFmpeg's libraries inside this program; ffmpeg: the ffmpeg program (for comparison)")
-	recov   = flag.String("recover", "refresh", "after a lost frame: refresh = let intra refresh repair the picture over a second; key = ask the host for a keyframe")
-	netSim  = flag.String("net", "", "simulate a bad network for what the player sends, e.g. delay=20ms,loss=1% (see netsim)")
+	connect  = flag.String("connect", "http://127.0.0.1:7400", "host address")
+	winX     = flag.Int("x", 0, "window x")
+	winY     = flag.Int("y", 0, "window y")
+	winW     = flag.Int("w", 1280, "window width")
+	winH     = flag.Int("h", 720, "window height")
+	hwdec    = flag.String("hwdec", defaultHW(), "FFmpeg hardware decoder (cuda, vaapi, d3d11va, dxva2) or none")
+	fake     = flag.Bool("fake-input", false, "press A every 500 ms instead of reading a controller")
+	seconds  = flag.Int("seconds", 0, "stop after this many seconds and print a summary (0 = run until closed)")
+	warmup   = flag.Int("warmup", 3, "seconds left out of the summary at the start")
+	stun     = flag.String("stun", "", "optional STUN server")
+	token    = flag.String("token", "", "the host's player token (ptsend prints it)")
+	iface    = flag.String("iface", "", "use only this network interface (default: all but Docker, VPN and bridge ones)")
+	quiet    = flag.Bool("quiet", false, "only print the final summary")
+	decArgs  = flag.String("decargs", "", "extra FFmpeg decoder input options, comma-separated, e.g. -threads,1 (for experiments)")
+	noAUD    = flag.Bool("no-aud", false, "don't end each frame with a delimiter (for experiments)")
+	decoder  = flag.String("decoder", "lib", "lib: FFmpeg's libraries inside this program; ffmpeg: the ffmpeg program (for comparison)")
+	recov    = flag.String("recover", "refresh", "after a lost frame: refresh = let intra refresh repair the picture over a second; key = ask the host for a keyframe")
+	iceDebug = flag.Bool("debug-ice", false, "log the WebRTC library's connection setup in detail")
+	logFile  = flag.String("log", "", "also write everything printed to this file (on Windows, where a console can close before it's read)")
+	skew     = flag.Duration("clock-skew", 0, "for testing: run this program's clock this far off the host's, as if on another machine")
+	netSim   = flag.String("net", "", "simulate a bad network for what the player sends, e.g. delay=20ms,loss=1% (see netsim)")
 )
 
 // Our own virtual pad (ptsend -pad) uses this product version; never read it
@@ -72,7 +78,8 @@ type meta struct{ cap, enc, rx int64 }
 
 type frame struct {
 	data              []byte
-	cap, enc, rx, dec int64
+	cap, enc, rx, dec int64 // cap and enc are host clock; rx and dec this program's
+	off               int64 // host clock minus ours, when it was decoded
 	stampV            uint32
 	stampOK, timed    bool
 }
@@ -129,15 +136,44 @@ type run struct {
 	lastShown                                                          int64
 }
 
+// clk lines our clock up with the host's (package clock).
+var clk clock.Estimator
+
+// hostOffset is the host's clock minus ours, or 0 until known (on one
+// machine it is about 0 anyway).
+func hostOffset() int64 {
+	off, _ := clk.Offset()
+	return off
+}
+
+// out is where the summary goes: the console, and the -log file if any.
+var out io.Writer = os.Stdout
+
 func main() {
 	flag.Parse()
+	if *logFile != "" {
+		f, err := os.Create(*logFile)
+		if err != nil {
+			log.Fatalf("log file: %v", err)
+		}
+		defer f.Close()
+		out = io.MultiWriter(os.Stdout, f)
+		log.SetOutput(io.MultiWriter(os.Stderr, f))
+		os.Stdout, os.Stderr = f, f // the WebRTC library's own messages too
+		out = f
+	}
+	mono.Skew = int64(*skew)
+	if *iceDebug {
+		os.Setenv("PION_LOG_DEBUG", "ice")
+		os.Setenv("PION_LOG_WARN", "all")
+	}
 	sdl.SetHint(sdl.HINT_RENDER_VSYNC, "0")
 	if err := sdl.Init(sdl.INIT_VIDEO | sdl.INIT_GAMECONTROLLER | sdl.INIT_EVENTS); err != nil {
 		log.Fatalf("SDL: %v", err)
 	}
 	defer sdl.Quit()
 
-	api, sim, err := sig.NewAPI(*netSim)
+	api, sim, err := sig.NewAPI(sig.Options{NetProfile: *netSim, Iface: *iface})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -161,6 +197,27 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	clockDC, err := pc.CreateDataChannel("clock", &webrtc.DataChannelInit{Ordered: &unordered, MaxRetransmits: &noResend})
+	if err != nil {
+		log.Fatal(err)
+	}
+	clockDC.OnMessage(func(m webrtc.DataChannelMessage) { _ = clk.Pong(m.Data, mono.Now()) })
+	clockDC.OnOpen(func() {
+		go func() {
+			// Quickly at first, so delays line up within half a second.
+			for i := 0; ; i++ {
+				if clockDC.ReadyState() != webrtc.DataChannelStateOpen {
+					return
+				}
+				_ = clockDC.Send(clock.Ping(mono.Now()))
+				if i < 25 {
+					time.Sleep(20 * time.Millisecond)
+				} else {
+					time.Sleep(200 * time.Millisecond)
+				}
+			}
+		}()
+	})
 
 	r := &receiver{frames: make(chan *frame, 4), pool: make(chan *frame, 8), ready: make(chan struct{}), pc: pc}
 	r.wake = sdl.RegisterEvents(1)
@@ -178,7 +235,19 @@ func main() {
 	}
 	go r.assemble()
 	go r.report(reportDC)
-	pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) { logf("connection: %s", s) })
+	pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
+		logf("connection: %s", s)
+		if s == webrtc.PeerConnectionStateConnected {
+			// Which addresses the stream actually uses: the thing to check
+			// when a connection between two homes doesn't work.
+			if t := pc.SCTP().Transport().ICETransport(); t != nil {
+				if pair, err := t.GetSelectedCandidatePair(); err == nil && pair != nil {
+					log.Printf("connected: us %s:%d (%s) <-> host %s:%d (%s)", pair.Local.Address, pair.Local.Port,
+						pair.Local.Typ, pair.Remote.Address, pair.Remote.Port, pair.Remote.Typ)
+				}
+			}
+		}
+	})
 
 	ans, err := negotiate(pc)
 	if err != nil {
@@ -238,7 +307,7 @@ func main() {
 			return
 		}
 		st.Seq++
-		st.SentNs = mono.Now()
+		st.SentNs = mono.Now() + hostOffset() // in the host's clock, so it can time it
 		_ = dc.Send(st.Marshal())
 	}
 
@@ -306,7 +375,7 @@ func main() {
 				}
 				rr.lastShown = shown
 				if latest.stampOK {
-					rr.total.AddNs(stamp.AgeNs(shown, latest.stampV))
+					rr.total.AddNs(stamp.AgeNs(shown+hostOffset(), latest.stampV))
 				}
 			}
 			r.pool <- latest
@@ -336,10 +405,24 @@ func main() {
 	}
 	r.collect(&window, &all, summaryFrom)
 	secs := time.Since(start).Seconds() - float64(*warmup)
-	fmt.Println()
+	fmt.Fprintln(out)
 	printRun(fmt.Sprintf("SUMMARY (%.0f s after %d s warm-up)", secs, *warmup), &all, secs, r)
+	if best, med, ok := clk.RoundTrip(); ok {
+		off, _ := clk.Offset()
+		fmt.Fprintf(out, "  network round trip (clock pings)     best %.1f, median %.1f ms; host clock minus ours %.3f s\n",
+			ms(best), ms(med), float64(off)/1e9)
+		if all.total.Len() > 0 {
+			screen := all.total.Median()
+			// The controller's trip to the host is about half the round trip.
+			press := ms(best)/2 + screen
+			fmt.Fprintf(out, "  estimated button to player's screen  %.1f ms (target: round trip + 40 = %.1f ms)\n",
+				press, ms(best)+40)
+		}
+	} else {
+		fmt.Fprintf(out, "  clocks never lined up (no clock pings answered): delays between the machines are meaningless\n")
+	}
 	if sim != nil {
-		fmt.Printf("  player -> host packets: %d sent, %d lost, %d dropped by the slow link\n",
+		fmt.Fprintf(out, "  player -> host packets: %d sent, %d lost, %d dropped by the slow link\n",
 			sim.Cnt.Sent.Load(), sim.Cnt.Lost.Load(), sim.Cnt.QueueDrops.Load())
 	}
 }
@@ -364,7 +447,7 @@ func (r *receiver) collect(window, all *run, summaryFrom int64) {
 			if !f.stampOK {
 				rr.stampFail++
 			} else {
-				rr.atDecode.AddNs(stamp.AgeNs(f.dec, f.stampV))
+				rr.atDecode.AddNs(stamp.AgeNs(f.dec+f.off, f.stampV))
 				if f.timed {
 					rr.capEnc.AddNs(stamp.AgeNs(f.enc, f.stampV))
 					if f.cap != 0 {
@@ -374,7 +457,7 @@ func (r *receiver) collect(window, all *run, summaryFrom int64) {
 				}
 			}
 			if f.timed {
-				rr.network.AddNs(f.rx - f.enc)
+				rr.network.AddNs(f.rx + f.off - f.enc)
 				rr.decode.AddNs(f.dec - f.rx)
 			}
 		}
@@ -390,22 +473,54 @@ func printRun(title string, rr *run, secs float64, r *receiver) {
 	if r.asm != nil {
 		rebuilt, late = r.asm.Cnt.RebuiltPkts.Load()-r.asm.Cnt.Ahead.Load(), r.asm.Cnt.Late.Load()
 	}
-	fmt.Printf("%s: shown %.1f fps, decoded %.1f fps, unreadable stamps %d\n",
+	fmt.Fprintf(out, "%s: shown %.1f fps, decoded %.1f fps, unreadable stamps %d\n",
 		title, float64(rr.shown)/secs, float64(rr.decoded)/secs, rr.stampFail)
-	fmt.Printf("  since start: lost packets rebuilt %d, frames lost %d, frames possibly damaged %d, late packets %d, keyframe requests %d\n",
+	fmt.Fprintf(out, "  since start: lost packets rebuilt %d, frames lost %d, frames possibly damaged %d, late packets %d, keyframe requests %d\n",
 		rebuilt, dropped, damaged, late, keyReqs)
-	fmt.Printf("  ms (median / p95 / max)\n")
-	fmt.Printf("  wait for rebuilding (from last media packet) %s\n", rw)
-	fmt.Printf("  time between frames shown            %s  (%d stalls over 50 ms)\n", rr.gaps.String(), rr.stalls)
-	fmt.Printf("  screen -> captured (incl. waiting)   %s\n", rr.capWait.String())
-	fmt.Printf("  captured -> encoded                  %s\n", rr.encode.String())
-	fmt.Printf("  screen -> encoded (capture + encode) %s\n", rr.capEnc.String())
-	fmt.Printf("  encoded -> received (network)        %s\n", rr.network.String())
-	fmt.Printf("  received -> decoded                  %s\n", rr.decode.String())
-	fmt.Printf("  decoded -> on screen (draw)          %s\n", rr.present.String())
-	fmt.Printf("  TOTAL screen -> decoded              %s\n", rr.atDecode.String())
-	fmt.Printf("  TOTAL screen -> player's screen      %s\n", rr.total.String())
+	fmt.Fprintf(out, "  ms (median / p95 / max)\n")
+	fmt.Fprintf(out, "  wait for rebuilding (from last media packet) %s\n", rw)
+	fmt.Fprintf(out, "  time between frames shown            %s  (%d stalls over 50 ms)\n", rr.gaps.String(), rr.stalls)
+	fmt.Fprintf(out, "  screen -> captured (incl. waiting)   %s\n", rr.capWait.String())
+	fmt.Fprintf(out, "  captured -> encoded                  %s\n", rr.encode.String())
+	fmt.Fprintf(out, "  screen -> encoded (capture + encode) %s\n", rr.capEnc.String())
+	fmt.Fprintf(out, "  encoded -> received (network)        %s\n", rr.network.String())
+	fmt.Fprintf(out, "  received -> decoded                  %s\n", rr.decode.String())
+	fmt.Fprintf(out, "  decoded -> on screen (draw)          %s\n", rr.present.String())
+	fmt.Fprintf(out, "  TOTAL screen -> decoded              %s\n", rr.atDecode.String())
+	fmt.Fprintf(out, "  TOTAL screen -> player's screen      %s\n", rr.total.String())
 }
+
+// defaultHW is the hardware decoder to try first: NVIDIA's on Linux (the
+// prototype's machine), Direct3D 11's on Windows (any graphics card).
+func defaultHW() string {
+	if runtime.GOOS == "windows" {
+		return "d3d11va"
+	}
+	return "cuda"
+}
+
+// logCandidates logs the network addresses in an SDP, once each.
+func logCandidates(who, sdp string) {
+	seen := map[string]bool{}
+	for _, line := range strings.Split(sdp, "\n") {
+		if !strings.HasPrefix(line, "a=candidate:") {
+			continue
+		}
+		f := strings.Fields(line) // foundation component transport priority address port typ type
+		if len(f) >= 8 && strings.EqualFold(f[2], "udp") {
+			c := fmt.Sprintf("%s:%s (%s)", f[4], f[5], f[7])
+			if !seen[c] {
+				seen[c] = true
+				log.Printf("%s %s", who, c)
+			}
+		}
+	}
+	if len(seen) == 0 {
+		log.Printf("%s no addresses at all", who)
+	}
+}
+
+func ms(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }
 
 func logf(format string, a ...any) {
 	if !*quiet {
@@ -423,8 +538,19 @@ func negotiate(pc *webrtc.PeerConnection) (*sig.Answer, error) {
 		return nil, err
 	}
 	<-gathered
+	logCandidates("we offer", pc.LocalDescription().SDP)
 	body, _ := json.Marshal(sig.Offer{SDP: pc.LocalDescription().SDP})
-	resp, err := http.Post(*connect+"/offer", "application/json", bytes.NewReader(body))
+	addr := *connect
+	if !strings.Contains(addr, "://") {
+		addr = "http://" + addr
+	}
+	req, err := http.NewRequest(http.MethodPost, addr+"/offer", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Eris-Token", *token)
+	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -437,7 +563,8 @@ func negotiate(pc *webrtc.PeerConnection) (*sig.Answer, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&ans); err != nil {
 		return nil, err
 	}
-	return &ans, pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: ans.SDP})
+	logCandidates("host offers", ans.SDP)
+	return &ans, pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: strings.TrimSpace(ans.SDP) + "\r\n"})
 }
 
 type rxPacket struct {
@@ -767,6 +894,7 @@ func (r *receiver) readDecoded(out io.Reader) {
 // window loop.
 func (r *receiver) deliver(f *frame) {
 	f.dec = mono.Now()
+	f.off = hostOffset()
 	f.stampV, f.stampOK = stamp.Decode(f.data[:r.w*r.h], r.w)
 
 	cp := *f // keep timing for stats; the pixels go back to the pool

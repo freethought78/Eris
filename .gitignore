@@ -5,3 +5,5 @@ client/bundle.js
 .server-*.txt
 .test-*.txt
 prototype/stream/bin/
+prototype/stream/logs/
+prototype/stream/dist/

@@ -3,11 +3,15 @@
 package sig
 
 import (
+	"fmt"
 	"log"
+	"net"
+	"strings"
 
 	"github.com/freethought78/eris/prototype/stream/internal/netsim"
 	"github.com/pion/ice/v4"
 	"github.com/pion/interceptor"
+	"github.com/pion/transport/v5"
 	"github.com/pion/transport/v5/stdnet"
 	"github.com/pion/webrtc/v4"
 )
@@ -32,11 +36,58 @@ const (
 	PayloadFEC   = 120
 )
 
+// Options say how this side connects.
+type Options struct {
+	// NetProfile, if set (see netsim.Parse), puts everything this side sends
+	// through a simulated bad network.
+	NetProfile string
+	// UDPPort, if set, carries all WebRTC traffic on one UDP port, so a
+	// router can forward it (the host).
+	UDPPort int
+	// PublicAddr, if set, is this machine's address on the internet (an IP
+	// or a name), offered to the other side as well as the local ones. With
+	// UDPPort forwarded on the router, a player anywhere can connect.
+	PublicAddr string
+	// Iface, if set, is the only network interface used. Otherwise virtual
+	// ones (Docker, VPNs, bridges) are left out: they can't reach the other
+	// side, and a VPN would route around the router's forwarding.
+	Iface string
+}
+
+// lanIP is the IPv4 address of iface, or of the first real network card.
+func lanIP(iface string) (net.IP, error) {
+	ifs, err := net.Interfaces()
+	if err != nil {
+		return nil, err
+	}
+	for _, i := range ifs {
+		if i.Flags&net.FlagUp == 0 || (iface != "" && i.Name != iface) || (iface == "" && virtual(i.Name)) {
+			continue
+		}
+		addrs, _ := i.Addrs()
+		for _, a := range addrs {
+			if n, ok := a.(*net.IPNet); ok && n.IP.To4() != nil && !n.IP.IsLoopback() {
+				return n.IP.To4(), nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("no network card with an IPv4 address (use -iface)")
+}
+
+// virtual reports interfaces that are never the way to the other machine.
+func virtual(name string) bool {
+	for _, p := range []string{"docker", "br-", "veth", "virbr", "wg", "tun", "tap", "lo"} {
+		if strings.HasPrefix(name, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // NewAPI builds a WebRTC API with just our codecs and loss reports (RTCP
-// sender and receiver reports), without re-sends. If netProfile is set
-// (see netsim.Parse), everything this side sends goes through a simulated bad
-// network; the returned Net has its counters.
-func NewAPI(netProfile string) (*webrtc.API, *netsim.Net, error) {
+// sender and receiver reports), without re-sends. When opts.NetProfile is
+// set, the returned Net has the simulated network's counters.
+func NewAPI(o Options) (*webrtc.API, *netsim.Net, error) {
 	m := &webrtc.MediaEngine{}
 	for _, c := range []webrtc.RTPCodecParameters{
 		{RTPCodecCapability: Codec, PayloadType: PayloadVideo},
@@ -50,18 +101,17 @@ func NewAPI(netProfile string) (*webrtc.API, *netsim.Net, error) {
 	if err := webrtc.ConfigureRTCPReports(ir); err != nil {
 		return nil, nil, err
 	}
-	opts := []func(*webrtc.API){webrtc.WithMediaEngine(m), webrtc.WithInterceptorRegistry(ir)}
-	var sim *netsim.Net
 	var se webrtc.SettingEngine
-	if netProfile == "" {
+	var sim *netsim.Net
+	var tnet transport.Net
+	if o.NetProfile == "" {
 		std, err := stdnet.NewNet()
 		if err != nil {
 			return nil, nil, err
 		}
-		se.SetNet(bufNet{std})
-		opts = append(opts, webrtc.WithSettingEngine(se))
+		tnet = bufNet{std}
 	} else {
-		p, err := netsim.Parse(netProfile)
+		p, err := netsim.Parse(o.NetProfile)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -69,12 +119,56 @@ func NewAPI(netProfile string) (*webrtc.API, *netsim.Net, error) {
 			return nil, nil, err
 		}
 		sim.OnListen = GrowBuffers
-		se.SetNet(sim)
-		se.SetICEMulticastDNSMode(ice.MulticastDNSModeDisabled)
-		opts = append(opts, webrtc.WithSettingEngine(se))
+		tnet = sim
 		log.Printf("simulated network for what this side sends: %s", p)
 	}
-	return webrtc.NewAPI(opts...), sim, nil
+	se.SetNet(tnet)
+	se.SetICEMulticastDNSMode(ice.MulticastDNSModeDisabled)
+	se.SetInterfaceFilter(func(name string) bool {
+		if o.Iface != "" {
+			return name == o.Iface
+		}
+		return !virtual(name)
+	})
+	if o.UDPPort != 0 {
+		// Bound to the real network card's address: bound to all, the port
+		// would also be offered on Docker and VPN addresses.
+		ip, err := lanIP(o.Iface)
+		if err != nil {
+			return nil, nil, err
+		}
+		c, err := net.ListenUDP("udp4", &net.UDPAddr{IP: ip, Port: o.UDPPort})
+		if err != nil {
+			return nil, nil, fmt.Errorf("UDP port %d: %w", o.UDPPort, err)
+		}
+		GrowBuffers(c)
+		log.Printf("WebRTC on UDP %s:%d", ip, o.UDPPort)
+		var pc net.PacketConn = c
+		if sim != nil {
+			pc = sim.Wrap(c)
+		}
+		se.SetICEUDPMux(ice.NewUDPMuxDefault(ice.UDPMuxParams{UDPConn: pc, Net: tnet}))
+	}
+	if o.PublicAddr != "" {
+		ip := o.PublicAddr
+		if net.ParseIP(ip) == nil {
+			addrs, err := net.LookupHost(o.PublicAddr)
+			if err != nil || len(addrs) == 0 {
+				return nil, nil, fmt.Errorf("public address %q: %v", o.PublicAddr, err)
+			}
+			ip = addrs[0]
+		}
+		// Offered as an extra local address, so it keeps the forwarded port
+		// (as a "server reflexive" one it would get a port of its own).
+		if err := se.SetICEAddressRewriteRules(webrtc.ICEAddressRewriteRule{
+			External: []string{ip}, AsCandidateType: webrtc.ICECandidateTypeHost, Mode: webrtc.ICEAddressRewriteAppend,
+		}); err != nil {
+			return nil, nil, err
+		}
+		log.Printf("offering public address %s (port forwarding needed on the router)", ip)
+	}
+	api := webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithInterceptorRegistry(ir), webrtc.WithSettingEngine(se))
+	return api, sim, nil
 }
 
 // ICEServers turns an optional STUN URL into a server list.

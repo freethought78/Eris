@@ -52,6 +52,131 @@ Building needs Go, SDL2 and FFmpeg's development packages
 
 Unit tests: `go test ./...` (the virtual-controller test needs `ERIS_UINPUT_TEST=1`).
 
+## Testing on real machines
+
+### On this PC's monitors, with a game
+
+```bash
+./run-real.sh 60
+```
+
+Start the game first, in borderless or windowed fullscreen on the main
+monitor (DP-0). A thin timestamp strip stays on top at its top-left; the
+player's window opens on the second monitor (HDMI-0) and shows the stream.
+Play while watching the second monitor. The controller drives the game
+directly, so this measures the video path, and shows whether NVENC holds its
+bitrate on real game content. The summary is saved in `logs/real-*/`.
+
+### With a player on another machine
+
+Once, on the router: forward **TCP 7400** and **UDP 7401** to this PC (or put
+it in the router's DMZ).
+
+On this PC:
+
+```bash
+PUBLIC=your-name.example.net ./run-host.sh
+```
+
+`PUBLIC` is this PC's internet address or name (a dynamic DNS name works).
+It streams the main monitor, plugs in a virtual controller for the player,
+runs outside a Mullvad VPN if one is connected (otherwise the player's
+packets would come and go through the VPN and miss the router), offers that
+address, and prints the exact command for the player, with a one-off token.
+Stop with Ctrl+C.
+
+On the player's PC, **Windows**: copy `dist/windows/` to it (build it with
+`build-windows.sh`, below; zipped it's about 44 MB), plug in a controller,
+and run `run-player.bat your-name.example.net:7400 TOKEN` with the token
+`run-host.sh` printed. The summary is also saved as `summary.txt` there, to
+send back.
+
+On the player's PC, **Linux**:
+
+1. Install Go, SDL2 and FFmpeg's development packages (`libsdl2-dev
+   libavcodec-dev libavutil-dev libavformat-dev libavdevice-dev
+   libswscale-dev` on Ubuntu or Debian).
+2. Get this folder (the repository is private: add them as a collaborator,
+   or send them a copy of `prototype/stream/`) and build the player:
+   `go build -o bin/ ./cmd/ptrecv`.
+3. Plug in a controller and run the command `run-host.sh` printed. Add
+   `-hwdec vaapi` on AMD or Intel graphics, `-hwdec none` if neither works.
+4. Send back what it prints at the end.
+
+What the summary shows:
+
+- **Network round trip**, measured with pings on their own channel, and the
+  offset between the two clocks. The player lines its clock up with the
+  host's (package `clock`: the fastest ping of the last 10 s), so every stage
+  is measured end to end, even across machines.
+- **Estimated button to player's screen**: half the best round trip (the
+  controller's trip to the host) plus the measured screen-to-screen delay,
+  next to the design target (round trip + 40 ms). The baseline to beat is
+  ft party play: about 60 ms round trip with Selkies.
+- **Connected: us ... <-> host ...**: which addresses the stream uses.
+  From outside, the host should show as its public address on port 7401.
+
+New options for this: `ptsend -udp-port` (all traffic on one UDP port),
+`-public` (an internet address to offer, IP or name), `-iface` (use one
+network card; by default Docker, VPN and bridge ones are left out), `-token`
+(made up and printed when `-listen` isn't loopback, as anyone who can reach
+the port would otherwise get the screen and a controller); `ptrecv -token`,
+`-iface` and `-clock-skew` (for testing: run the player's clock off by this
+much, as if on another machine).
+
+Tested on this PC as if from another machine (player clock 300 s and 777 s
+off, network 20 ms each way): the offset came out exact, the controller's trip
+measured 20.5 ms, a wrong token was refused, and the host offered exactly
+its LAN address and its public address, both on port 7401. Not tested yet: the path
+through the router from outside.
+
+### The Windows player
+
+```bash
+SDL2_DIR=.../SDL2-2.32.10/x86_64-w64-mingw32 FFMPEG_DIR=.../ffmpeg-...-win64-lgpl-shared-8.1 ./build-windows.sh
+```
+
+Cross-compiles the player on Linux (needs `gcc-mingw-w64-x86-64`) into
+`dist/windows/`: `ptrecv.exe` (13 MB), the SDL2 and FFmpeg DLLs it uses
+(avcodec, avutil, swresample; 108 MB together, mostly avcodec) and
+`run-player.bat`. Built and tested with SDL 2.32.10 (libsdl-org/SDL,
+"mingw" development release) and FFmpeg 8.1.3 (BtbN FFmpeg-Builds, "win64
+lgpl shared", dated build 2026-10-31). On Windows the player tries Direct3D 11
+hardware decoding first (any graphics card); `-log FILE` copies everything
+it prints to a file.
+
+### In a Bottles bottle, on this PC
+
+```bash
+WINE=1 SDL2_DIR=... FFMPEG_DIR=... ./build-windows.sh    # once, into dist/windows-wine/
+./run-bottle.sh 20                                     # or NET="delay=15ms,loss=1%" ./run-bottle.sh 30
+```
+
+Runs the Linux host and the Windows player (in the `DannyRando-Test` bottle,
+or `BOTTLE=...`) on two private virtual screens. It shows the Windows build
+starts, connects, decodes, draws and reads a controller, and tests the clock
+alignment for real: Wine's Windows clock runs about 2.5 s apart from Linux's,
+and the player lined them up by itself. It isn't a second machine (same
+network, graphics card and kernel), and its delays mean little, since Wine
+translates graphics and decoding.
+
+First results (2026-11-26, soda-11.0-10 runner): 60 fps, nothing lost,
+21.6 ms screen to screen on the loopback; with 15 ms each way and 1% loss
+both ways, 300 lost packets rebuilt, no frames lost, an estimated 50.6 ms
+from button to the player's screen against a 70.2 ms target. It found the
+real controller ("Amazon Luna Controller"). Direct3D 11 decoding reported
+itself on, but under Wine it can't be told whether it really decoded on the
+graphics card.
+
+**Why the Wine build is separate:** since Go 1.24, opening a UDP socket on
+Windows also switches off "network unreachable" reports
+(`SIO_UDP_NETRESET`). No Wine supports that yet (Wine 9.0, 11.0 and 11.2
+all return error 10045), so every UDP socket fails and WebRTC can't
+connect. `WINE=1` builds with a copy of Go's own `net/fd_windows.go` that
+carries on when that one call is unsupported. On real Windows the call
+succeeds, so it makes no difference there, but builds for real Windows leave
+it out and use Go exactly as it is.
+
 ## Results so far (2026-11-25, RTX 4070, 2560x1440 at 60 fps, 12 Mbps, same machine)
 
 Medians in ms, 12–17 s runs after a 3 s warm-up. Runs vary by a few ms.
@@ -304,10 +429,11 @@ moment the player's window opens.
 
 ## Next
 
-1. A run on the real monitors with a game, controller in hand. Also checks
+1. A run on the real monitors with a game (`run-real.sh`). Also checks
    whether NVENC follows the bitrate on real game content.
-2. Cross-machine runs: needs the two clocks lined up for the stage figures
-   (auto-quality doesn't need it).
-3. Windows host: `ddagrab` capture, ViGEm controller.
+2. A run with a player on another machine (`run-host.sh`), against
+   ft party play's baseline; a Windows player can use `dist/windows/`.
+3. Windows host: `ddagrab` capture, ViGEm controller (needs real Windows:
+   Wine has neither).
 4. Showing frames straight from the graphics card instead of copying them back
    to memory (saves a few ms on the player side).

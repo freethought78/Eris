@@ -9,12 +9,16 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"math"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -25,6 +29,7 @@ import (
 	"time"
 
 	"github.com/freethought78/eris/prototype/stream/internal/avenc"
+	"github.com/freethought78/eris/prototype/stream/internal/clock"
 	"github.com/freethought78/eris/prototype/stream/internal/fec"
 	"github.com/freethought78/eris/prototype/stream/internal/flv"
 	"github.com/freethought78/eris/prototype/stream/internal/mono"
@@ -59,6 +64,10 @@ var (
 	kbpsAt   = flag.String("kbps-at", "", "for testing the encoder: change the bitrate at set times, e.g. 5s:4000,10s:12000")
 	paceMode = flag.String("pace", "auto", "spread each frame's packets just above the player's measured link speed: auto (once the link is seen dropping bursts), on, or off")
 	fecMode  = flag.String("fec", "auto", "recovery packets: auto (follow the player's reported loss), off, or a fixed percentage such as 20")
+	udpPort  = flag.Int("udp-port", 0, "carry all WebRTC traffic on this one UDP port, for forwarding on the router (0 = any)")
+	public   = flag.String("public", "", "this machine's internet address (IP or name, e.g. a dynamic DNS name), offered to the player")
+	iface    = flag.String("iface", "", "use only this network interface (default: all but Docker, VPN and bridge ones)")
+	token    = flag.String("token", "", "secret the player must give; made up and printed if empty and -listen isn't loopback")
 	pipe     = flag.String("pipeline", "lib", "lib: capture and encode with FFmpeg's libraries in this program (NVENC only); ffmpeg: run the ffmpeg program (for comparison)")
 )
 
@@ -70,15 +79,32 @@ func main() {
 		&width, &height, &offX, &offY); err != nil {
 		log.Fatalf("bad -region %q: want WxH+X+Y", *region)
 	}
-	api, sim, err := sig.NewAPI(*netSim)
+	api, sim, err := sig.NewAPI(sig.Options{NetProfile: *netSim, UDPPort: *udpPort, PublicAddr: *public, Iface: *iface})
 	if err != nil {
 		log.Fatal(err)
+	}
+	if *token == "" && !loopback(*listen) {
+		// Anyone who can reach the port would otherwise get the screen and
+		// (with -pad) a controller.
+		b := make([]byte, 12)
+		_, _ = rand.Read(b)
+		*token = hex.EncodeToString(b)
+		log.Printf("player token: %s (give it to the player with -token)", *token)
 	}
 	h := &host{api: api, sim: sim}
 	http.HandleFunc("/offer", h.offer)
 	log.Printf("ptsend: capturing %s %s at %d fps, %d kbps, %s, auto-quality %v; waiting for a player on http://%s",
 		*display, *region, *fps, *kbps, *encoder, *auto, *listen)
 	log.Fatal(http.ListenAndServe(*listen, nil))
+}
+
+func loopback(addr string) bool {
+	h, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(h)
+	return h == "localhost" || (ip != nil && ip.IsLoopback())
 }
 
 type host struct {
@@ -93,6 +119,12 @@ func (h *host) offer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST an offer", http.StatusMethodNotAllowed)
 		return
 	}
+	if *token != "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Eris-Token")), []byte(*token)) != 1 {
+		log.Printf("refused a player from %s: wrong or missing token", r.RemoteAddr)
+		http.Error(w, "wrong or missing token", http.StatusUnauthorized)
+		return
+	}
+	log.Printf("player connecting from %s", r.RemoteAddr)
 	h.mu.Lock()
 	if h.busy {
 		h.mu.Unlock()
@@ -170,6 +202,13 @@ func (h *host) startSession(body io.Reader) (*sig.Answer, error) {
 			dc.OnMessage(func(m webrtc.DataChannelMessage) { s.input(m.Data) })
 		case "report":
 			dc.OnMessage(func(m webrtc.DataChannelMessage) { s.feedback(m.Data) })
+		case "clock": // the player lines its clock up with ours (package clock)
+			dc.OnMessage(func(m webrtc.DataChannelMessage) {
+				t2 := mono.Now()
+				if pong, err := clock.Pong(m.Data, t2, mono.Now()); err == nil {
+					_ = dc.Send(pong)
+				}
+			})
 		}
 	})
 	var once sync.Once

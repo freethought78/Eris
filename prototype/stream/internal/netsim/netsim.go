@@ -171,6 +171,10 @@ func (n *Net) ListenUDP(network string, laddr *net.UDPAddr) (transport.UDPConn, 
 	return n.wrap(c), nil
 }
 
+// Wrap puts an existing socket through the simulated network (for a socket
+// opened outside Net, such as a single forwarded port).
+func (n *Net) Wrap(c transport.UDPConn) transport.UDPConn { return n.wrap(c) }
+
 func (n *Net) DialUDP(network string, laddr, raddr *net.UDPAddr) (transport.UDPConn, error) {
 	c, err := n.Net.DialUDP(network, laddr, raddr)
 	if err != nil {

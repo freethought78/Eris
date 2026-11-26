@@ -323,8 +323,9 @@ The only part with real uncertainty, so it comes first.
 
 - Helper captures the main monitor with NVENC, sends it over WebRTC to a second machine,
   shows it in a game window, and sends a controller back.
-- Measure delay with the frame timestamp, and on bad connections with `netsim.py` from ft
-  party play.
+- Measure delay with the frame timestamp, end to end across machines (the player lines its
+  clock up with the host's), and on bad connections with the prototype's built-in network
+  simulator (`netsim.py` from ft party play only relays TCP).
 - Repeat with a Windows machine as host.
 - Decide the player game window: (a) the helper feeds `mpv` in low-latency mode, or (b) an
   Electron window decoding with WebCodecs. Pick whichever measures faster with acceptable
