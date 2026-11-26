@@ -193,10 +193,21 @@ is a Go Live stream that also accepts controllers.
 - **Low-latency settings:** no B-frames, no lookahead, a very small rate-control buffer (so
   every frame is about the same size), gradual intra refresh instead of large keyframes,
   and each frame encoded as soon as it's captured.
-- **Bitrate control:** ft party play's auto-quality method, ported: lower the bitrate when
-  any player falls more than the target delay behind their best round trip, raise it slowly
-  when everyone is comfortably inside it. The helper controls the encoder directly, so this
-  carries over in full.
+- **Bitrate control (auto-quality):** ft party play's method, moved from pings to the video
+  itself (built and tested in Phase 0):
+  - **Measuring:** the player times every frame from encoded to arrived and reports ten
+    times a second how far frames are *behind* their best delay since joining (the best is
+    never raised). Clock offset between the machines cancels out.
+  - **Down:** behind more than the target (15 ms) for two reports, or twice the target at
+    once: cut to just under what reached the player, then wait for the queue to drain
+    before judging again. Also cut when clearly less arrives than was sent (a link that
+    drops instead of queueing).
+  - **Stalls:** a gap with no packets at all (a Wi-Fi hiccup) is waited out, and the backlog
+    it leaves is allowed to drain, rather than cut for.
+  - **Up:** after 2 s comfortably under the target, raise 10%, growing by 5% with each raise
+    in a row that holds (up to 25%). A raise that fails doubles the wait before the next.
+  - **Recovery packets come out of the same budget,** and loss seen while the link is full
+    doesn't make more of them (5.6).
 
 ### 5.2 Game audio without Eris voice
 
@@ -273,7 +284,10 @@ affects its own frame, and nothing has to wait for it. The player path keeps it 
    every loss as worse: they are about four times the size of a normal frame, so the
    next loss is more likely to hit them.
 4. **Auto-quality (5.1) keeps the stream below the link's speed**, so the link itself
-   doesn't start dropping packets.
+   doesn't start dropping packets. Loss while the link is full is the link overflowing,
+   so it never raises the recovery packets; those are also capped at half the video.
+   Otherwise the two would feed each other (Phase 0 saw recovery packets reach 150% of the
+   video on a link that had just halved).
 
 Same idea as the controller channel, where every packet carries the full state so a lost
 one is simply replaced by the next.
@@ -380,6 +394,9 @@ forwarding, auto-update, code signing, macOS. None of these need a redesign to a
 | Hosts struggle with port forwarding | Only two ports; clear hosting guide; automatic port forwarding later |
 | A home server's upload can't feed many watchers | Host limits in 3.3; quality drops gracefully instead of failing |
 | Direct player connections blocked by some routers | Automatic fallback through LiveKit |
+| FFmpeg's NVENC wrapper makes every bitrate change a keyframe | With the small rate buffer it stays normal-sized (a moment of softness, not a burst); auto-quality changes the rate only when it means to. Calling NVENC directly (also needed for reference-frame invalidation) removes it |
+| The encoder can't go below some bitrate on some content (NVENC needed about 7 Mbps for a hard-edged test pattern at 1440p even at its lowest quality) | At auto-quality's floor, step the resolution or frame rate down; confirm with real games in Phase 0 |
+| Links that drop bursts instead of queueing them (small buffers, traffic policers) | Pace packets at just above the measured link speed; not built yet |
 
 ---
 

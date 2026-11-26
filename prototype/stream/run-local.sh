@@ -38,7 +38,7 @@ Xvfb $HOST_DPY -screen 0 ${W}x${H}x24 -nolisten tcp >"$LOG/xvfb-host.log" 2>&1 &
 Xvfb $PLAYER_DPY -screen 0 1280x720x24 -nolisten tcp >"$LOG/xvfb-player.log" 2>&1 & pids+=($!)
 sleep 1
 
-DISPLAY=$HOST_DPY bin/ptclock -busy -w $W -h $H >"$LOG/ptclock.log" 2>&1 & pids+=($!)
+DISPLAY=$HOST_DPY bin/ptclock -busy -pattern "${PATTERN:-sharp}" -noise "${NOISE:-512}" -w $W -h $H >"$LOG/ptclock.log" 2>&1 & pids+=($!)
 NETARGS=()
 if [ -n "${NET:-}" ]; then NETARGS=(-net "$NET"); fi
 DISPLAY=$HOST_DPY bin/ptsend -listen 127.0.0.1:$PORT -region ${W}x${H}+0+0 "${NETARGS[@]}" "$@" >"$LOG/ptsend.log" 2>&1 & pids+=($!)

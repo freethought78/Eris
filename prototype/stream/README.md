@@ -5,9 +5,9 @@ Tests the Play Together video path end to end, to see how low the delay can go
 
 | Program | Role |
 |---|---|
-| `ptsend` | Host. Captures a screen region (x11grab) and encodes with NVENC using low-latency settings, inside the program with FFmpeg's libraries. Sends each frame over WebRTC (Pion) the moment it's encoded, followed by recovery packets sized to the loss the player reports (`-fec auto`, `off` or a fixed percentage). Never re-sends. Makes a keyframe when the player has nothing to show, and applies controller input to a virtual Xbox 360 pad (`-pad`). `-pipeline ffmpeg` uses the `ffmpeg` program instead (also allows `-encoder x264`). |
-| `ptrecv` | Player's game window. Receives with no smoothing buffer and no waiting for re-sends, rebuilds lost packets from the recovery packets, decodes with NVDEC inside the program (FFmpeg's libraries), draws with SDL as soon as a frame is ready, sends the controller state over a channel that never re-sends. Prints the delay of each stage. `-decoder ffmpeg` uses the `ffmpeg` program instead. |
-| `ptclock` | Draws the time as a barcode at the top-left of the host's screen (`-busy` adds moving content). `ptrecv` reads it back from each frame to get the true screen-to-screen delay. |
+| `ptsend` | Host. Captures a screen region (x11grab) and encodes with NVENC using low-latency settings, inside the program with FFmpeg's libraries. Sends each frame over WebRTC (Pion) the moment it's encoded, followed by recovery packets sized to the loss the player reports (`-fec auto`, `off` or a fixed percentage). Never re-sends. Auto-quality follows what the player's connection carries (`-auto`, `-target`, `-min-kbps`, `-max-kbps`; `-kbps` is the starting rate). Makes a keyframe when the player has nothing to show, and applies controller input to a virtual Xbox 360 pad (`-pad`). `-pipeline ffmpeg` uses the `ffmpeg` program instead (also allows `-encoder x264`). |
+| `ptrecv` | Player's game window. Receives with no smoothing buffer and no waiting for re-sends, rebuilds lost packets from the recovery packets, decodes with NVDEC inside the program (FFmpeg's libraries), draws with SDL as soon as a frame is ready, sends the controller state over a channel that never re-sends, and reports frame timing to the host ten times a second for auto-quality. Prints the delay of each stage. `-decoder ffmpeg` uses the `ffmpeg` program instead. |
+| `ptclock` | Draws the time as a barcode at the top-left of the host's screen (`-busy` adds moving content). `ptrecv` reads it back from each frame to get the true screen-to-screen delay. `-pattern shapes` draws coloured blocks instead of the hard-edged pattern, which the encoder can squeeze to any bitrate; `-noise` sets the size of the random-noise square. |
 
 Both ends must run on one machine for now, because the delay figures compare
 the two programs' clocks.
@@ -37,6 +37,15 @@ wait for it before being dropped), `spike` and `every` (Wi-Fi style stalls).
 `RECV_ARGS="-recover key"` makes the player ask for a keyframe after every lost
 frame instead of letting intra refresh repair the picture. `-fec off` (to
 `ptsend`) turns the recovery packets off, for comparison.
+
+`at=10s:5000` in `NET` (repeatable) changes the simulated link's speed during
+the run. For auto-quality tests use `PATTERN=shapes NOISE=128`: the default
+picture can't be encoded below about 8 Mbps (see below), so lowering the
+bitrate wouldn't change anything.
+
+```bash
+PATTERN=shapes NOISE=128 NET="delay=15ms,at=10s:5000,at=30s:0" ./run-local.sh 60
+```
 
 Building needs Go, SDL2 and FFmpeg's development packages
 (`libavcodec-dev libavutil-dev libavformat-dev libavdevice-dev libswscale-dev`).
@@ -134,14 +143,86 @@ Without (the first version, or `-fec off`):
 - Fixed along the way: if the first keyframe was lost, the player never
   started.
 
+## Auto-quality (2026-11-25, `PATTERN=shapes NOISE=128`, 30 s runs)
+
+ft party play's method, moved from pings to the video itself (DESIGN.md 5.1).
+The player times every frame and reports how far frames are behind their best
+delay; the host cuts when that goes over 15 ms and raises gently when it's
+well under. Starting rate 12 Mbps; `delay=15ms` each way in every row.
+
+| Network | Cuts | Settled at | Behind, median | Frames lost | Screen to screen, median / p95 |
+|---|---|---|---|---|---|
+| Clean | 0 | 12 Mbps | 0.8 ms | 0 | 54 / 60 |
+| 1% loss | 0 | 12 Mbps | 1.1 ms | 0 | 44 / 51 |
+| Wi-Fi: jitter 10 ms, 100 ms stall every ~5 s | 0 | 12 Mbps | 4.2 ms | 0 | 49 / 69 |
+| 8 Mbps link, 100 ms buffer | 1 | 6.0 Mbps | 10.7 ms | 0 | 62 / 68 |
+| 8 Mbps link, 500 ms buffer (bufferbloat) | 1 | 6.6 Mbps | 10.0 ms | 0 | 59 / 65 |
+| 8 Mbps link with Wi-Fi stalls | 1 | 6.3 Mbps | 10.3 ms | 0 | 69 / 80 |
+| Link drops 12 → 5 Mbps at 10 s, recovers at 30 s (60 s run) | 4 | 3.4, then back to 12 | | 59 | 47 / 61 |
+| 6 Mbps link that drops bursts (5 ms buffer) | 4 | floor (1.5) | | all | |
+
+- **The link drop:** cut in the same second, back under the target in about 4 s.
+  After the link recovered, the first raise came 2 s later and full quality
+  12 s after that. The lost frames are all from the first second of the drop.
+- **On a slow link, "behind" settles around 10 ms**, not zero. That's how long a
+  frame takes to cross an 8 Mbps link, compared with the smallest frame it
+  started from, and only a lower bitrate shortens it. Auto stays there because
+  it's under the target, and doesn't raise because that isn't well under.
+- **Wi-Fi stalls aren't cut for.** A stall is a gap with no packets at all; a
+  full link still delivers packets steadily, just fewer of them. The backlog a
+  stall leaves is let drain.
+- **Links that drop bursts are not handled yet.** The host sends each frame's
+  packets all at once. A link with almost no buffer (some traffic policers do
+  this) drops part of every frame, at any bitrate, so auto-quality cuts to the
+  floor and nothing gets through. The fix is pacing: spreading each frame's
+  packets at just above the link's speed, which costs nothing in delay because
+  the link can't deliver them any faster anyway. It needs a link-speed estimate,
+  so it's left for later.
+
+Found and fixed while building it:
+
+- **Recovery packets and auto-quality fed each other.** On a link that had just
+  halved, the overflow was reported as loss, the recovery packets grew to 150%
+  of the video and filled the link further. Loss seen while the link is full no
+  longer raises them, and they're capped at half the video.
+- **A link far too slow looked like a Wi-Fi stall.** Hardly any frame arrived
+  whole, so reports said "no frames" and auto waited 3 s. A stall now means no
+  packets at all.
+- **Cuts came too fast.** It cut four times in a second without waiting for the
+  queue to drain, and ended at the floor. It now waits for the drain.
+- **Frames given up while their packets were waiting to be read.** After a stall
+  the player was busy decoding the backlog on the same thread that reassembles
+  packets, so its 2 ms grace ran out with the packets queued behind it.
+  Decoding now has its own thread, queued packets are all read before a frame
+  is given up, and the grace is 4 ms (it only ever delays a frame after a lost
+  one).
+- **The system's receive buffer overflowed after stalls.** Everything held up
+  arrives at once; the default 208 KB buffer dropped up to 25 packets a run. Each
+  socket now asks for 4 MB (Linux caps it at `net.core.rmem_max`; this machine
+  allows 4 MB, many default to 208 KB, so the installer may need to raise it).
+
+About the encoder:
+
+- **Every bitrate change through FFmpeg is a keyframe.** FFmpeg's NVENC wrapper
+  resets the encoder on a bitrate change. With the one-frame rate buffer the
+  keyframe stays the size of a normal frame, so it costs a moment of softness,
+  not a burst of data, and auto-quality only changes the rate when it means to.
+  Calling NVENC directly would avoid it (and allow reference-frame
+  invalidation for loss recovery).
+- **NVENC can't encode some content below a certain bitrate.** On the default
+  hard-edged scrolling pattern at 1440p it needed about 7 Mbps even at its
+  lowest quality, where x264 needed 0.2 Mbps. On the coloured-blocks pattern it
+  holds any rate from 1.5 to 12 Mbps exactly. Real games need checking; if a
+  game shows the same floor, auto-quality has to step the resolution or frame
+  rate down instead.
+
 ## Next
 
-1. A run on the real monitors with a game, controller in hand.
-2. Auto-quality using the new bitrate control, so a slow or congested link
-   lowers the bitrate instead of dropping packets. It also has to leave room
-   for the recovery packets.
-3. Cross-machine runs: needs the two clocks lined up (estimated over the
-   connection).
+1. A run on the real monitors with a game, controller in hand. Also checks
+   whether NVENC follows the bitrate on real game content.
+2. Pacing, for links that drop bursts (see auto-quality above).
+3. Cross-machine runs: needs the two clocks lined up for the stage figures
+   (auto-quality doesn't need it).
 4. Windows host: `ddagrab` capture, ViGEm controller.
 5. Showing frames straight from the graphics card instead of copying them back
    to memory (saves a few ms on the player side).

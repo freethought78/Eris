@@ -3,6 +3,7 @@ package netsim
 import (
 	"math"
 	"net"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -13,9 +14,13 @@ func TestParse(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := Profile{20 * time.Millisecond, 5 * time.Millisecond, 0.02, 3, 10000, 40 * time.Millisecond,
-		100 * time.Millisecond, 5 * time.Second}
-	if p != want {
+		100 * time.Millisecond, 5 * time.Second, nil}
+	if !reflect.DeepEqual(p, want) {
 		t.Fatalf("got %+v", p)
+	}
+	q, err := Parse("kbps=20000,at=10s:5000,at=25s:0")
+	if err != nil || len(q.Steps) != 2 || q.Steps[0] != (Step{10 * time.Second, 5000}) || q.Steps[1] != (Step{25 * time.Second, 0}) {
+		t.Fatalf("steps: %+v %v", q.Steps, err)
 	}
 	if _, err := Parse("lag=3"); err == nil {
 		t.Fatal("unknown key accepted")

@@ -30,9 +30,17 @@ type Profile struct {
 	Queue  time.Duration // most a packet can wait for the link before it's dropped
 	Spike  time.Duration // a delay spike of this size ...
 	Every  time.Duration // ... about this often (Wi-Fi style)
+	Steps  []Step        // link speed changes over time
+}
+
+// Step changes the link speed (0 = unlimited) at a time after start.
+type Step struct {
+	At   time.Duration
+	Kbps int
 }
 
 // Parse reads "delay=20ms,jitter=5ms,loss=1%,burst=3,kbps=20000,queue=50ms,spike=150ms,every=10s".
+// "at=10s:5000" (repeatable) changes the link speed to 5000 kbps 10 s in.
 func Parse(s string) (Profile, error) {
 	p := Profile{Burst: 1, Queue: 50 * time.Millisecond}
 	for _, kv := range strings.Split(s, ",") {
@@ -65,6 +73,17 @@ func Parse(s string) (Profile, error) {
 			p.Burst, err = strconv.ParseFloat(v, 64)
 		case "kbps":
 			p.Kbps, err = strconv.Atoi(v)
+		case "at":
+			when, k, ok := strings.Cut(v, ":")
+			var st Step
+			if !ok {
+				err = fmt.Errorf("want time:kbps")
+				break
+			}
+			if st.At, err = time.ParseDuration(when); err == nil {
+				st.Kbps, err = strconv.Atoi(k)
+			}
+			p.Steps = append(p.Steps, st)
 		default:
 			return p, fmt.Errorf("netsim: unknown setting %q", k)
 		}
@@ -96,6 +115,9 @@ func (p Profile) String() string {
 	if p.Kbps > 0 {
 		add("link %d kbps, queue %v", p.Kbps, p.Queue)
 	}
+	for _, st := range p.Steps {
+		add("link %d kbps after %v", st.Kbps, st.At)
+	}
 	if p.Spike > 0 && p.Every > 0 {
 		add("spike %v every ~%v", p.Spike, p.Every)
 	}
@@ -115,7 +137,10 @@ type Net struct {
 	*stdnet.Net
 	p   Profile
 	Cnt Counters
+	// OnListen, if set, is called with each new socket (to size its buffers).
+	OnListen func(transport.UDPConn)
 
+	start                 time.Time
 	mu                    sync.Mutex // shared link state: all sockets share one link
 	rng                   *rand.Rand
 	bad                   bool      // loss model is in a burst
@@ -130,7 +155,7 @@ func New(p Profile) (*Net, error) {
 	if err != nil {
 		return nil, err
 	}
-	n := &Net{Net: std, p: p, rng: rand.New(rand.NewPCG(1, 2))}
+	n := &Net{Net: std, p: p, rng: rand.New(rand.NewPCG(1, 2)), start: time.Now()}
 	n.planSpike(time.Now())
 	return n, nil
 }
@@ -139,6 +164,9 @@ func (n *Net) ListenUDP(network string, laddr *net.UDPAddr) (transport.UDPConn, 
 	c, err := n.Net.ListenUDP(network, laddr)
 	if err != nil {
 		return nil, err
+	}
+	if n.OnListen != nil {
+		n.OnListen(c)
 	}
 	return n.wrap(c), nil
 }
@@ -188,7 +216,13 @@ func (n *Net) schedule(size int) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	at := now
-	if n.p.Kbps > 0 {
+	kbps := n.p.Kbps
+	for _, st := range n.p.Steps {
+		if now.Sub(n.start) >= st.At {
+			kbps = st.Kbps
+		}
+	}
+	if kbps > 0 {
 		start := now
 		if n.free.After(start) {
 			start = n.free
@@ -198,7 +232,7 @@ func (n *Net) schedule(size int) (time.Time, bool) {
 			return time.Time{}, false
 		}
 		const overhead = 28 // IP + UDP headers
-		n.free = start.Add(time.Duration(float64(size+overhead) * 8 / float64(n.p.Kbps) * float64(time.Millisecond)))
+		n.free = start.Add(time.Duration(float64(size+overhead) * 8 / float64(kbps) * float64(time.Millisecond)))
 		at = n.free
 	}
 	at = at.Add(n.p.Delay)

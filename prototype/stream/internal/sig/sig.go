@@ -8,6 +8,7 @@ import (
 	"github.com/freethought78/eris/prototype/stream/internal/netsim"
 	"github.com/pion/ice/v4"
 	"github.com/pion/interceptor"
+	"github.com/pion/transport/v5/stdnet"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -51,7 +52,15 @@ func NewAPI(netProfile string) (*webrtc.API, *netsim.Net, error) {
 	}
 	opts := []func(*webrtc.API){webrtc.WithMediaEngine(m), webrtc.WithInterceptorRegistry(ir)}
 	var sim *netsim.Net
-	if netProfile != "" {
+	var se webrtc.SettingEngine
+	if netProfile == "" {
+		std, err := stdnet.NewNet()
+		if err != nil {
+			return nil, nil, err
+		}
+		se.SetNet(bufNet{std})
+		opts = append(opts, webrtc.WithSettingEngine(se))
+	} else {
 		p, err := netsim.Parse(netProfile)
 		if err != nil {
 			return nil, nil, err
@@ -59,7 +68,7 @@ func NewAPI(netProfile string) (*webrtc.API, *netsim.Net, error) {
 		if sim, err = netsim.New(p); err != nil {
 			return nil, nil, err
 		}
-		var se webrtc.SettingEngine
+		sim.OnListen = GrowBuffers
 		se.SetNet(sim)
 		se.SetICEMulticastDNSMode(ice.MulticastDNSModeDisabled)
 		opts = append(opts, webrtc.WithSettingEngine(se))
@@ -87,4 +96,17 @@ type Answer struct {
 	Width  int    `json:"width"`
 	Height int    `json:"height"`
 	FPS    int    `json:"fps"`
+}
+
+// Feedback is the player's report to the host, ten times a second, on the
+// "report" data channel. It drives auto-quality (package rate).
+type Feedback struct {
+	Seq      uint32 `json:"seq"`
+	SpanNs   int64  `json:"span"`   // time this report covers
+	Bytes    int64  `json:"bytes"`  // video and recovery packets that arrived in it
+	Frames   int    `json:"frames"` // frames that arrived in it
+	Lost     int    `json:"lost"`   // frames given up on in it
+	BehindNs int64  `json:"behind"` // median frame delay beyond the best since joining
+	MaxNs    int64  `json:"max"`    // worst frame delay beyond the best
+	GapNs    int64  `json:"gap"`    // longest time with no packet at all (a stall, not a slow link)
 }

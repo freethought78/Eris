@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -103,6 +104,15 @@ type receiver struct {
 	rx  chan rxPacket
 	asm *assemble.Assembler
 
+	// For the auto-quality reports, guarded by mu.
+	rxBytes   int64
+	fbDelays  []int64 // this report's frame delays (encoded -> arrived)
+	fbLost    int
+	bestDelay int64
+	haveBest  bool
+	lastPkt   int64 // when the last packet of either stream arrived
+	maxGap    int64
+
 	// Frames after a lost one may show a damaged picture until a keyframe or
 	// a full intra-refresh cycle (one second) repairs it. Reader goroutine only.
 	damageLeft int
@@ -143,6 +153,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	reportDC, err := pc.CreateDataChannel("report", &webrtc.DataChannelInit{Ordered: &unordered, MaxRetransmits: &noResend})
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	r := &receiver{frames: make(chan *frame, 4), pool: make(chan *frame, 8), ready: make(chan struct{}), pc: pc}
 	r.wake = sdl.RegisterEvents(1)
@@ -155,7 +169,11 @@ func main() {
 		r.ssrc = uint32(t.SSRC())
 		go r.readTrack(t, false)
 	})
+	if os.Getenv("ERIS_ASMDEBUG") != "" {
+		assemble.Debug = log.Printf
+	}
 	go r.assemble()
+	go r.report(reportDC)
 	pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) { logf("connection: %s", s) })
 
 	ans, err := negotiate(pc)
@@ -430,6 +448,14 @@ func (r *receiver) readTrack(t *webrtc.TrackRemote, isFEC bool) {
 		if err != nil {
 			return
 		}
+		now := mono.Now()
+		r.mu.Lock()
+		r.rxBytes += int64(len(p.Payload) + 12)
+		if r.lastPkt != 0 {
+			r.maxGap = max(r.maxGap, now-r.lastPkt)
+		}
+		r.lastPkt = now
+		r.mu.Unlock()
 		r.rx <- rxPacket{p, isFEC}
 	}
 }
@@ -437,16 +463,41 @@ func (r *receiver) readTrack(t *webrtc.TrackRemote, isFEC bool) {
 // assemble rebuilds frames from the video and recovery streams. There is
 // deliberately no jitter buffer and no waiting for re-sends (DESIGN.md 5.6).
 func (r *receiver) assemble() {
+	// Decoding runs on its own goroutine, so packets keep being read while a
+	// frame decodes, and grace times aren't eaten by decoding.
+	work := make(chan decodeItem, 16)
+	go func() {
+		for it := range work {
+			if it.lost {
+				r.lost()
+			} else {
+				r.frameReady(it.pkts, it.rx)
+			}
+		}
+	}()
 	r.asm = &assemble.Assembler{
 		Deliver: func(pkts []*rtp.Packet, rebuilt bool, waited time.Duration) {
+			r.mu.Lock()
 			if rebuilt {
-				r.mu.Lock()
 				r.rebuildWait.AddNs(int64(waited))
-				r.mu.Unlock()
 			}
-			r.frameReady(pkts)
+			r.mu.Unlock()
+			work <- decodeItem{pkts: pkts, rx: mono.Now()}
 		},
-		Lost: r.lost,
+		Lost: func() {
+			r.mu.Lock()
+			r.dropped++
+			r.fbLost++
+			r.mu.Unlock()
+			work <- decodeItem{lost: true}
+		},
+	}
+	feed := func(x rxPacket) {
+		if x.fec {
+			r.asm.FEC(x.p, time.Now())
+		} else {
+			r.asm.Media(x.p, time.Now())
+		}
 	}
 	t := time.NewTimer(time.Hour)
 	for {
@@ -457,14 +508,21 @@ func (r *receiver) assemble() {
 		}
 		select {
 		case x := <-r.rx:
-			if x.fec {
-				r.asm.FEC(x.p, time.Now())
-			} else {
-				r.asm.Media(x.p, time.Now())
-			}
+			feed(x)
 		case <-tc:
-			r.asm.Tick(time.Now())
 		}
+		// Take in everything already waiting before giving up on any frame.
+		r.asm.Hold = true
+		for more := true; more; {
+			select {
+			case x := <-r.rx:
+				feed(x)
+			default:
+				more = false
+			}
+		}
+		r.asm.Hold = false
+		r.asm.Tick(time.Now())
 		if tc != nil && !t.Stop() {
 			select {
 			case <-t.C:
@@ -474,21 +532,25 @@ func (r *receiver) assemble() {
 	}
 }
 
+type decodeItem struct {
+	pkts []*rtp.Packet
+	rx   int64 // when the frame was complete
+	lost bool  // a frame given up on, in order with the others
+}
+
+// lost runs on the decode goroutine, in order with the frames.
 func (r *receiver) lost() {
-	r.mu.Lock()
-	r.dropped++
-	r.mu.Unlock()
 	r.damageLeft = r.fps
 	if *recov == "key" {
 		r.askKeyframe()
 	}
 }
 
-// askKeyframe asks the host for a keyframe, at most every 100 ms (the
+// askKeyframe asks the host for a keyframe, at most every 500 ms (the
 // keyframe itself takes a while to arrive, and asking again won't speed it up).
 func (r *receiver) askKeyframe() {
 	now := mono.Now()
-	if now-r.lastKeyReq < 100*int64(time.Millisecond) {
+	if now-r.lastKeyReq < 500*int64(time.Millisecond) {
 		return
 	}
 	r.lastKeyReq = now
@@ -498,8 +560,41 @@ func (r *receiver) askKeyframe() {
 	_ = r.pc.WriteRTCP([]rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: r.ssrc}})
 }
 
-func (r *receiver) frameReady(pkts []*rtp.Packet) {
-	rx := mono.Now()
+// report sends auto-quality feedback to the host every 100 ms, over a channel
+// that never re-sends (a lost report is replaced by the next).
+func (r *receiver) report(dc *webrtc.DataChannel) {
+	t := time.NewTicker(100 * time.Millisecond)
+	defer t.Stop()
+	var seq uint32
+	last := mono.Now()
+	for range t.C {
+		now := mono.Now()
+		r.mu.Lock()
+		gap := r.maxGap
+		if r.lastPkt != 0 {
+			gap = max(gap, now-r.lastPkt) // a stall still going on
+		}
+		fb := sig.Feedback{SpanNs: now - last, Bytes: r.rxBytes, Frames: len(r.fbDelays), Lost: r.fbLost, GapNs: gap}
+		r.maxGap = 0
+		if len(r.fbDelays) > 0 {
+			sort.Slice(r.fbDelays, func(i, j int) bool { return r.fbDelays[i] < r.fbDelays[j] })
+			fb.BehindNs = r.fbDelays[len(r.fbDelays)/2] - r.bestDelay
+			fb.MaxNs = r.fbDelays[len(r.fbDelays)-1] - r.bestDelay
+		}
+		r.rxBytes, r.fbDelays, r.fbLost = 0, r.fbDelays[:0], 0
+		r.mu.Unlock()
+		last = now
+		if dc.ReadyState() != webrtc.DataChannelStateOpen {
+			continue
+		}
+		seq++
+		fb.Seq = seq
+		b, _ := json.Marshal(fb)
+		_ = dc.Send(b)
+	}
+}
+
+func (r *receiver) frameReady(pkts []*rtp.Packet, rx int64) {
 	var h codecs.H264Packet
 	var annexB []byte
 	for _, p := range pkts {
@@ -536,6 +631,15 @@ func (r *receiver) frameReady(pkts []*rtp.Packet) {
 		r.damageLeft--
 		r.mu.Lock()
 		r.damaged++
+		r.mu.Unlock()
+	}
+	if m.enc != 0 {
+		d := m.rx - m.enc // includes the clock offset between machines, which cancels below
+		r.mu.Lock()
+		r.fbDelays = append(r.fbDelays, d)
+		if !r.haveBest || d < r.bestDelay {
+			r.bestDelay, r.haveBest = d, true
+		}
 		r.mu.Unlock()
 	}
 	<-r.ready

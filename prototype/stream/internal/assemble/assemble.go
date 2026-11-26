@@ -16,9 +16,10 @@ import (
 
 // Grace is how long a complete frame waits for recovery packets of an older,
 // incomplete one. The host sends recovery packets before the next frame, so
-// they are normally there already; this covers them being read a moment
-// later than the next frame's packets.
-const Grace = 2 * time.Millisecond
+// they are normally there already; this covers the two streams being read
+// a few milliseconds apart (seen after a stall, when everything arrives at
+// once). It only ever delays a frame that follows a lost one.
+const Grace = 4 * time.Millisecond
 
 // Counters can be read from any goroutine.
 type Counters struct {
@@ -41,6 +42,10 @@ type Assembler struct {
 	// Lost is called for each frame given up on (or that never arrived).
 	Lost func()
 	Cnt  Counters
+	// Hold, while set, stops frames being given up: set it while feeding a
+	// batch of packets that were already waiting, so a frame isn't given up
+	// with its missing packets right behind in the queue. Tick afterwards.
+	Hold bool
 
 	frames     []*frame // pending, oldest first
 	doneTS     uint32   // newest frame delivered or given up on
@@ -273,11 +278,18 @@ func (a *Assembler) process(now time.Time) {
 			a.graceUntil = now.Add(Grace)
 			return
 		}
-		if now.Before(a.graceUntil) {
+		if now.Before(a.graceUntil) || a.Hold {
 			return
+		}
+		if Debug != nil {
+			Debug("gave up frame ts %d: %d media packets, layout %v (n=%d), fec groups %d, done %v, hopeless %v, pending %d, marker %v",
+				f.ts, len(f.media), f.layout, f.n, len(f.groups), f.fecDone, hopeless, len(a.frames), f.haveMarker)
 		}
 		a.finish(f)
 		a.Cnt.Lost.Add(1)
 		a.Lost()
 	}
 }
+
+// Debug, if set, is told why each frame was given up.
+var Debug func(format string, a ...any)

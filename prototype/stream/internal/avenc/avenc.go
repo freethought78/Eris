@@ -23,6 +23,8 @@ typedef struct {
 	int want_key;
 } eris_enc;
 
+static void eris_verbose(void) { av_log_set_level(AV_LOG_VERBOSE); }
+
 static int eris_open_capture(eris_enc *e, const char *url, const char *size, const char *fps) {
 	avdevice_register_all();
 	const AVInputFormat *fmt = av_find_input_format("x11grab");
@@ -119,13 +121,16 @@ import "C"
 import (
 	"errors"
 	"fmt"
+	"os"
+	"sync/atomic"
 	"unsafe"
 )
 
 // Encoder captures and encodes one screen region.
 type Encoder struct {
-	e   *C.eris_enc
-	fps int
+	e       *C.eris_enc
+	fps     int
+	pending atomic.Int64 // bitrate to apply before the next frame, 0 = none
 }
 
 func averr(code C.int) error {
@@ -136,6 +141,9 @@ func averr(code C.int) error {
 
 // New opens capture of display (":0") at the region and an encoder for it.
 func New(display string, w, h, x, y, fps, kbps int, encoder string) (*Encoder, error) {
+	if os.Getenv("ERIS_AVLOG") == "verbose" {
+		C.eris_verbose()
+	}
 	e := (*C.eris_enc)(C.calloc(1, C.size_t(unsafe.Sizeof(C.eris_enc{}))))
 	url := C.CString(fmt.Sprintf("%s+%d,%d", display, x, y))
 	size := C.CString(fmt.Sprintf("%dx%d", w, h))
@@ -170,6 +178,9 @@ func (enc *Encoder) Grab() error {
 // Encode encodes the last grab and returns the frame as Annex-B. The returned
 // slice is only valid until the next call. key is true for a keyframe.
 func (enc *Encoder) Encode() (au []byte, key bool, err error) {
+	if k := enc.pending.Swap(0); k > 0 {
+		C.eris_set_kbps(enc.e, C.int(k), C.int(enc.fps))
+	}
 	r := C.eris_encode(enc.e)
 	if r < 0 {
 		return nil, false, fmt.Errorf("encode: %w", averr(r))
@@ -181,8 +192,11 @@ func (enc *Encoder) Encode() (au []byte, key bool, err error) {
 	return unsafe.Slice((*byte)(unsafe.Pointer(p.data)), int(p.size)), p.flags&C.AV_PKT_FLAG_KEY != 0, nil
 }
 
-// SetKbps changes the bitrate from the next frame.
-func (enc *Encoder) SetKbps(kbps int) { C.eris_set_kbps(enc.e, C.int(kbps), C.int(enc.fps)) }
+// SetKbps changes the bitrate from the next frame. Safe from any goroutine.
+// Through FFmpeg, NVENC makes that frame a keyframe; with the small rate
+// buffer it stays the size of a normal frame, so it costs a moment of
+// sharpness, not a burst of data.
+func (enc *Encoder) SetKbps(kbps int) { enc.pending.Store(int64(kbps)) }
 
 // RequestKeyframe makes the next frame a keyframe (for a new viewer, or after
 // heavy loss).
