@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -228,6 +229,7 @@ type session struct {
 	paceKbps  float64      // pacing rate used for the last frame
 	tail      pace.Tail    // where lost packets were, over the last couple of seconds
 	pacing    bool         // the link has been seen dropping bursts
+	fastSince int64        // while pacing: since when the link has measured far above the stream
 	spread    stats.Series // time to send a frame's packets
 	ctl       *rate.Controller
 	videoKbps int     // what the encoder is set to
@@ -301,6 +303,12 @@ func (s *session) readRTCP(sender *webrtc.RTPSender, video bool) {
 					s.mu.Lock()
 					if *auto && s.ctl.Congested(time.Unix(0, mono.Now())) {
 						fl = 0 // the link overflowing, not random loss: don't add to it
+					}
+					if s.pacing {
+						// A link that cuts bursts loses our own overflow, and
+						// more recovery packets only add to it (they cost up to
+						// 80% of the bitrate there for little gain).
+						fl = 0
 					}
 					// Rise at once, fall back gradually (about 30% a second).
 					s.lossEst = max(fl, s.lossEst*0.7)
@@ -439,6 +447,7 @@ type outFrame struct {
 // rate (package pace) so a link with almost no buffer doesn't drop the end
 // of every frame. Its own goroutine, so pacing never holds up capture.
 func (s *session) sender(ctx context.Context) {
+	runtime.LockOSThread() // pace.Sleep blocks the thread
 	for {
 		var f outFrame
 		select {
@@ -465,7 +474,7 @@ func (s *session) sender(ctx context.Context) {
 		var media, recovery int64
 		for i, size := range sizes {
 			if d := time.Until(start.Add(when[i])); d >= pace.MinSleep {
-				time.Sleep(d)
+				pace.Sleep(d)
 			}
 			var err error
 			if i < len(f.media) {
@@ -640,7 +649,22 @@ func (s *session) feedback(b []byte) {
 	s.tail.Late += int(fb.LateN)
 	if s.tail.Bursty() && !s.pacing {
 		s.pacing = true
+		s.fastSince = 0
 		log.Printf("pacing on: %d of %d lost packets were in the second half of their frames", s.tail.Late, s.tail.Early+s.tail.Late)
+	}
+	// Off again once the link measures far faster than the stream for a
+	// while (it had dropped and has recovered): a frame then fits whatever
+	// buffer it has. If it still cuts bursts, the losses turn pacing back on.
+	if s.pacing {
+		switch {
+		case s.pacer.Estimate() < 4*float64(s.ctl.Kbps()):
+			s.fastSince = 0
+		case s.fastSince == 0:
+			s.fastSince = now
+		case now-s.fastSince > int64(10*time.Second):
+			s.pacing = false
+			log.Printf("pacing off: the link measures %.0f Mbps, far above the stream", s.pacer.Estimate()/1000)
+		}
 	}
 	if fb.Seq%20 == 0 {
 		s.tail = pace.Tail{}

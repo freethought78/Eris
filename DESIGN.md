@@ -294,7 +294,12 @@ affects its own frame, and nothing has to wait for it. The player path keeps it 
    seen, the host spreads each frame's packets at 1.25 times the link speed, measured from
    how spread out frames arrive. That costs no delay, since the link can't deliver faster,
    and auto-quality keeps the stream under 75% of that speed. Pacing isn't used otherwise,
-   because jitter also spreads frames out and would read as a slow link.
+   because jitter also spreads frames out and would read as a slow link. On such a link,
+   loss is our own overflow, so it doesn't grow the recovery packets. Pacing turns off
+   again once the link measures far faster than the stream (more than 4 times, for 10 s).
+   Pacing needs sleeps accurate to well under a millisecond: Go's own are up to 1 ms late,
+   so the helper uses the system's (nanosleep on Linux; a high-resolution waitable timer
+   on Windows, still to do).
 
 Same idea as the controller channel, where every packet carries the full state so a lost
 one is simply replaced by the next.
@@ -403,7 +408,7 @@ forwarding, auto-update, code signing, macOS. None of these need a redesign to a
 | Direct player connections blocked by some routers | Automatic fallback through LiveKit |
 | FFmpeg's NVENC wrapper makes every bitrate change a keyframe | With the small rate buffer it stays normal-sized (a moment of softness, not a burst); auto-quality changes the rate only when it means to. Calling NVENC directly (also needed for reference-frame invalidation) removes it |
 | The encoder can't go below some bitrate on some content (NVENC needed about 7 Mbps for a hard-edged test pattern at 1440p even at its lowest quality) | At auto-quality's floor, step the resolution or frame rate down; confirm with real games in Phase 0 |
-| Links that drop bursts instead of queueing them (small buffers, traffic policers) | Pacing (5.6), built in Phase 0. On the tightest test link a few percent of frames are still lost, because the recovery packets travel at the end of each burst, the part such a link cuts off |
+| Links that drop bursts instead of queueing them (small buffers, traffic policers) | Pacing (5.6), built in Phase 0. On the tightest test link (6 Mbps, 3-packet buffer) about 1 frame in 40 is still lost, most in the first 2 s before pacing starts |
 
 ---
 

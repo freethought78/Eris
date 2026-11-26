@@ -233,9 +233,9 @@ at any bitrate, so before pacing that link showed nothing at all.
 | Network | Pacing | Shown fps | Frames lost | Screen to screen, median / p95 |
 |---|---|---|---|---|
 | 6 Mbps link, 5 ms buffer, before pacing | n/a | 0 | all | |
-| 6 Mbps link, 5 ms buffer | on after about 1 s | 59 | 104 (3%) | 64 / 75 |
-| 10 Mbps link, 5 ms buffer | on after about 1 s | 60 | 28, all before it came on | 59 / 66 |
-| Link drops 12 → 5 Mbps (50 ms buffer) | on during the drop | 59 | 36 | 50 / 62 |
+| 6 Mbps link, 5 ms buffer | on after about 1 s | 60 | 39 (2%), most before it came on | 63 / 70 |
+| 10 Mbps link, 5 ms buffer | on after about 1 s | 60 | 22, all before it came on | 65 / 72 |
+| Link drops 12 → 5 Mbps (50 ms buffer) | on during the drop, off 10 s after it recovers | 59 | 53 | 60 / 69 |
 | Clean, 1% loss, Wi-Fi, 8 Mbps with normal and deep buffers | stays off | as before | 0 | as before |
 
 - **Two first tries didn't work.** Pacing always, from the frame spread: Wi-Fi
@@ -243,21 +243,33 @@ at any bitrate, so before pacing that link showed nothing at all.
   to that added about 10 ms. Using the narrowest gaps between packets instead
   (jitter only widens gaps): packets arrive in clumps, so an 8 Mbps link
   measured at over 500 Mbps.
-- **Pacing stays on once started,** but follows the measured speed: after the
-  link-drop test recovered, it was pacing at about 1 Gbps, which is no pacing
-  in practice (frames went out within 0.3 ms).
-- **What's left on the tightest link:** recovery packets go at the end of each
-  burst, which is exactly what such a link cuts off, so they help little there
-  and still make up over half the bitrate. Mixing them into the frame, or not
-  counting end-of-frame loss as random loss, would be the next things to try.
-- Sleeps shorter than 0.2 ms are skipped (packets go slightly early instead),
-  because each one overshoots by about as much again.
+- **Pacing turns off again** once the link measures more than 4 times the
+  stream for 10 s (after the link-drop test recovered, it measured about
+  1 Gbps). If the link still cuts bursts, the losses turn it back on.
+- **Recovery packets on these links.** Once paced, the losses that are left fall
+  evenly across frames, so moving the recovery packets into the middle of the
+  frame wouldn't help. What did: on such a link the loss is our own overflow,
+  so it no longer grows the recovery packets. Before, they reached 40–90% of
+  the bitrate, adding to the overflow. With that, frames lost on the 6 Mbps
+  link fell from 104–140 to 39, damaged frames from 800–1,300 to about 200, and
+  the video's share of the stream rose from about half to about 80%.
+- **The first 2 s are the weak spot.** The stream starts at full rate with no
+  pacing, so on such a link most frames in the first second or two are lost
+  until enough losses show the pattern.
+- **Sleeps had to be precise.** Go's own sleep wakes up to 1 ms late on this
+  machine (0.3 ms took 1.1 ms, 1.3 ms took 2.1 ms), which sends paced packets in
+  clumps. The sender uses the system's nanosleep instead (about 60 µs late), on
+  a thread of its own, and so does the network simulator for short waits, so its
+  slow links space packets like real ones. Windows will need a
+  high-resolution waitable timer for the same. Sleeps under 0.1 ms are skipped.
 
 ## Next
 
 1. A run on the real monitors with a game, controller in hand. Also checks
    whether NVENC follows the bitrate on real game content.
-2. Recovery packets on links that cut bursts short (see pacing above).
+2. A better start on links that cut bursts short (the first 2 s, see pacing
+   above): for example, start paced at a moderate rate until the link has been
+   measured.
 3. Cross-machine runs: needs the two clocks lined up for the stage figures
    (auto-quality doesn't need it).
 4. Windows host: `ddagrab` capture, ViGEm controller.

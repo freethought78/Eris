@@ -129,9 +129,9 @@ func (r *Rate) Kbps(streamKbps float64) float64 {
 }
 
 // MinSleep: packets due sooner than this go straight away. Sleeping for
-// less overshoots by about as much again, which adds up over a frame on a
-// fast link; going early by this much is harmless.
-const MinSleep = 200 * time.Microsecond
+// less overshoots by about as much again (Sleep is about 60 µs late), which
+// adds up over a frame on a fast link; going early by this much is harmless.
+const MinSleep = 100 * time.Microsecond
 
 // Estimate is the smoothed link speed.
 func (r *Rate) Estimate() float64 { return r.est }

@@ -312,10 +312,15 @@ func (c *conn) run() {
 			}
 		}
 		p := front.Value.(*pending)
-		if d := time.Until(p.at); d > 0 {
-			t.Reset(d)
+		if d := time.Until(p.at); d > 0 && d < 3*time.Millisecond {
+			// Short waits: Go's timers wake up to a millisecond late, which
+			// would release a slow link's packets in clumps.
+			precise(d)
+		} else if d > 0 {
+			t.Reset(d - 2*time.Millisecond) // then the precise wait for the rest
 			select {
 			case <-t.C:
+				continue
 			case <-c.wake: // the front can't change, but don't oversleep a close
 				if !t.Stop() {
 					<-t.C
