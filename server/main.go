@@ -14,11 +14,13 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -69,17 +71,27 @@ func main() {
 	hub := newHub(store)
 	mux := routes(store, hub)
 
-	srv := &http.Server{Addr: *addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	cert, fingerprint, err := loadCert(dir)
+	if err != nil {
+		log.Fatalf("certificate: %v", err)
+	}
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second,
+		TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}}
+	plain := &http.Server{Handler: plainHandler(infoHandler(store)), ReadHeaderTimeout: 10 * time.Second}
 	st := store.Settings()
 	log.Printf("eris-server %s: %q, data in %s, listening on %s", version, st.Name, dir, *addr)
-	if first || st.OwnerCode != "" {
-		host := *public
-		if host == "" {
-			host = "this-pc's-address"
-		}
-		_, port, _ := strings.Cut(*addr, ":")
-		fmt.Printf("\n  Join link: eris://%s:%s\n  Owner code (first join only): %s\n\n", host, port, st.OwnerCode)
+	host := *public
+	if host == "" {
+		host = "this-pc's-address"
 	}
+	_, port, _ := strings.Cut(*addr, ":")
+	// The link carries the certificate's fingerprint: give members the whole
+	// link, so their app knows it's really this server.
+	fmt.Printf("\n  Join link: eris://%s:%s#%s\n", host, port, fingerprint)
+	if first || st.OwnerCode != "" {
+		fmt.Printf("  Owner code (first join only): %s\n", st.OwnerCode)
+	}
+	fmt.Println()
 	// Updates: a newer release is installed in place of this program, and
 	// the server restarts into it when nobody is streaming.
 	program, _ = thisProgram()
@@ -125,7 +137,7 @@ func main() {
 			for sc.Scan() {
 				switch strings.TrimSpace(sc.Text()) {
 				case "stop":
-					stop <- "stopped from the dashboard"
+					stop <- "stopped (asked to)"
 					return
 				case "update":
 					if *noCheck {
@@ -144,11 +156,19 @@ func main() {
 		}()
 	}
 	served := make(chan error, 1)
-	go func() { served <- srv.ListenAndServe() }()
+	ln, err := net.Listen("tcp", *addr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	tlsLn, plainLn := splitListen(ln)
+	go func() { served <- srv.Serve(tls.NewListener(tlsLn, srv.TLSConfig)) }()
+	go func() { _ = plain.Serve(plainLn) }()
 	shutdown := func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		hub.closeAll()
 		_ = srv.Shutdown(ctx)
+		_ = plain.Shutdown(ctx)
+		ln.Close()
 		cancel()
 		store.Close()
 	}
@@ -168,13 +188,18 @@ func main() {
 }
 
 // routes is the HTTP API (DESIGN.md 3.4).
-func routes(store *Store, hub *Hub) *http.ServeMux {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/info", func(w http.ResponseWriter, r *http.Request) {
+func infoHandler(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		st := store.Settings()
 		writeJSON(w, http.StatusOK, map[string]any{"name": st.Name, "version": version,
-			"needs_password": st.ServerPassword != ""})
-	})
+			"needs_password": st.ServerPassword != "", "encrypted": true})
+	}
+}
+
+func routes(store *Store, hub *Hub) *http.ServeMux {
+	mux := http.NewServeMux()
+	chatRoutes(mux, store, hub)
+	mux.HandleFunc("GET /api/info", infoHandler(store))
 	mux.HandleFunc("POST /api/join", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Name      string `json:"name"`

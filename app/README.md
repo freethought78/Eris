@@ -17,11 +17,35 @@ npm install
 npx vite build && npx electron .
 ```
 
+**Trying changes before a release:** `tools/dev.sh` (or the **Eris (dev)**
+desktop icon) builds this folder's code, committed or not, and runs it next to
+the installed Eris without touching it. In a terminal window it starts a dev
+server on this PC only (`127.0.0.1:7301`, data in `~/.config/Eris-server-dev/`,
+first copied from the real server's, so the rooms, members and logins match)
+and a dev app (its own server list and logs in `~/.config/Eris-dev/`, already
+connected to the dev server as the same member; marked **DEV** in the window,
+streaming on UDP 7411). Closing the dev app stops the dev server; closing the
+terminal stops both. `tools/dev.sh --fresh` (the icon's right-click menu)
+starts over from a new copy of the real server's data.
+
 Two copies on one PC: `ERIS_PROFILE=name` keeps a separate server list and
 logs (`~/.config/Eris-name/`).
 
-For automated tests the app takes `--auto='{...}'`: `join` (`address`, `name`,
-`ownerCode`, `password`), `live: true`, `testWith: "name"` with `seconds`
+The window: servers on the left, then the server's rooms (a lock on private
+ones, a dot for unread), the room's chat in the middle (history loads as you
+scroll up; Enter sends, Shift+Enter is a new line, Up edits your last message;
+files by the + button, drag and drop or paste, pictures shown in place), and
+members on the right with Join for anyone live. Owners and admins add rooms
+with + and change them with the gear. Stream tests are at the bottom of the
+rooms list. Links in messages open in the browser.
+
+**Encryption:** all calls to servers go through the main process, which pins
+each server's certificate (`pins.json` in the app's data folder; see DESIGN.md
+3.4). Adding a server takes the whole join link, `eris://host:port#fingerprint`.
+
+For automated tests the app takes `--auto='{...}'`: `join` (`link` or
+`address`, `name`, `ownerCode`, `password`), `say` and `expect` (send a message
+with a file and a picture to the first room; wait for the other copy's), `live: true`, `testWith: "name"` with `seconds`
 (and `testDelay`, seconds to wait first), and `watch: "name"` (join that
 member's stream as soon as they're live). `./test-e2e.sh` uses it to run a
 server, a hosting copy and a playing copy on two private virtual screens,
@@ -115,4 +139,4 @@ command lines lose the JSON's quotes), and writes its window's console to
   and helper at one version, plus SHA256SUMS; `--publish` tags and creates the
   GitHub release that apps and `eris-server -update` look for.
 
-Not built yet: the `eris://` link type, and everything chat and voice.
+Not built yet: the `eris://` link type, mentions, and voice.

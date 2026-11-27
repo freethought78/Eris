@@ -1,7 +1,8 @@
 // Eris app, main process: the window, the saved server list, HTTP calls to
 // servers, and the streaming helper (DESIGN.md section 4; the helper is
 // helper/, started here and talked to with JSON lines on stdin and stdout).
-const { app, BrowserWindow, ipcMain, screen } = require('electron')
+const { app, BrowserWindow, ipcMain, screen, session, net, shell } = require('electron')
+const crypto = require('node:crypto')
 const path = require('node:path')
 const fs = require('node:fs')
 const readline = require('node:readline')
@@ -62,7 +63,9 @@ function startHelper(role, opts) {
     const b = d.bounds
     const s = d.scaleFactor || 1
     const region = `${Math.round(b.width * s)}x${Math.round(b.height * s)}+${Math.round(b.x * s)}+${Math.round(b.y * s)}`
-    args.push('-region', region, '-udp-port', String(opts.udpPort || 7401), '-pad')
+    // A dev build (tools/dev.sh) streams on its own port, so it can run next to the real app.
+    const udpPort = opts.udpPort || (process.env.ERIS_PROFILE === 'dev' ? 7411 : 7401)
+    args.push('-region', region, '-udp-port', String(udpPort), '-pad')
     if (opts.publicAddr) args.push('-public', opts.publicAddr)
   } else {
     args.push('-w', String(opts.width || 1280), '-h', String(opts.height || 720))
@@ -113,7 +116,7 @@ function createWindow() {
     width: 1100,
     height: 720,
     backgroundColor: '#1a1a2e',
-    title: 'Eris',
+    title: app.isPackaged ? 'Eris' : 'Eris (dev)',
     icon: path.join(__dirname, '..', 'build', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -123,6 +126,17 @@ function createWindow() {
     },
   })
   win.setMenuBarVisibility(false)
+  // Links in messages open in the browser; the window never goes anywhere else.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//.test(url)) shell.openExternal(url)
+    return { action: 'deny' }
+  })
+  win.webContents.on('will-navigate', (e, url) => {
+    if (!url.startsWith('file://')) {
+      e.preventDefault()
+      if (/^https?:\/\//.test(url)) shell.openExternal(url)
+    }
+  })
   // The window's console goes to logs/app.log, to find problems on a PC we
   // can't see.
   fs.mkdirSync(userFile('logs'), { recursive: true })
@@ -147,23 +161,127 @@ function autoConfig() {
   }
 }
 
-ipcMain.handle('servers-load', () => {
+// Servers' certificates (server/tls.go): each server makes its own, and the
+// join link carries its fingerprint. A server's certificate is trusted when
+// it matches the one pinned for its host name; a server added before
+// encryption is pinned the first time it's seen. Any other certificate is
+// refused. Everything else (GitHub, for updates) is checked the usual way.
+let knownHosts = new Set() // host names of the saved servers
+let pins = {} // host name -> fingerprint (base64url SHA-256 of the certificate)
+const refused = new Set() // host names whose certificate didn't match
+
+function hostOf(address) {
+  return String(address || '').replace(/^\w+:\/\//, '').replace(/[/#].*$/, '').replace(/:\d+$/, '').replace(/^\[|\]$/g, '')
+}
+
+function loadPins() {
   try {
-    return JSON.parse(fs.readFileSync(userFile('servers.json'), 'utf8'))
+    pins = JSON.parse(fs.readFileSync(userFile('pins.json'), 'utf8'))
   } catch {
-    return []
+    pins = {}
   }
+}
+
+function savePins() {
+  fs.mkdirSync(app.getPath('userData'), { recursive: true })
+  fs.writeFileSync(userFile('pins.json'), JSON.stringify(pins, null, 2), { mode: 0o600 })
+}
+
+function noteServers(list) {
+  knownHosts = new Set(list.map((s) => hostOf(s.address)))
+  let changed = false
+  for (const s of list) {
+    // A pin from a join link wins (the owner may have made a new certificate).
+    if (s.pin && pins[hostOf(s.address)] !== s.pin) {
+      pins[hostOf(s.address)] = s.pin
+      refused.delete(hostOf(s.address))
+      changed = true
+    }
+  }
+  if (changed) savePins()
+}
+
+function fingerprint(cert) {
+  const der = Buffer.from(String(cert.data).replace(/-----[^-]+-----/g, '').replace(/\s+/g, ''), 'base64')
+  return crypto.createHash('sha256').update(der).digest('base64url')
+}
+
+function verifyCertificate(req, done) {
+  const host = req.hostname
+  const pin = pins[host]
+  if (!pin && !knownHosts.has(host)) return done(-3) // not one of our servers
+  const fp = fingerprint(req.certificate)
+  if (pin === fp) return done(0)
+  if (!pin) {
+    pins[host] = fp // first sight of a server added before encryption
+    savePins()
+    return done(0)
+  }
+  refused.add(host)
+  done(-2)
+}
+
+ipcMain.handle('servers-load', () => {
+  let list = []
+  try {
+    list = JSON.parse(fs.readFileSync(userFile('servers.json'), 'utf8'))
+  } catch {}
+  noteServers(list)
+  return list
 })
 
 ipcMain.handle('servers-save', (_e, list) => {
   fs.mkdirSync(app.getPath('userData'), { recursive: true })
   fs.writeFileSync(userFile('servers.json'), JSON.stringify(list, null, 2), { mode: 0o600 })
+  noteServers(list)
+})
+
+// A join link's pin, before the server is saved (joining needs it first).
+// Without one (an address typed by hand), the first certificate seen is
+// trusted from then on.
+ipcMain.handle('pin', (_e, { address, pin }) => {
+  const host = hostOf(address)
+  knownHosts.add(host)
+  if (!pin) return
+  pins[host] = pin
+  refused.delete(host)
+  savePins()
+})
+
+function netError(url, err) {
+  if (refused.has(hostOf(url))) {
+    return "This server's certificate has changed, so it may not be your server. If its owner made a new one, remove the server and join again with the new link."
+  }
+  return String(err.cause?.code || err.message || err)
+}
+
+// Uploading a file for a message: the window hands over the bytes.
+ipcMain.handle('upload', async (_e, { url, token, type, data }) => {
+  try {
+    const res = await net.fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': type || 'application/octet-stream', Authorization: 'Bearer ' + token },
+      body: Buffer.from(data),
+    })
+    let json = null
+    try {
+      json = await res.json()
+    } catch {}
+    return { status: res.status, json }
+  } catch (err) {
+    return { status: 0, json: { error: netError(url, err) } }
+  }
+})
+
+// Saving a file from a message: asks where (the usual save dialog).
+ipcMain.handle('download', (_e, url) => {
+  if (win && !win.isDestroyed() && /^https:\/\//.test(url)) win.webContents.downloadURL(url)
 })
 
 // HTTP to a server, from here rather than the window (no cross-origin limits).
 ipcMain.handle('api', async (_e, { method, url, token, body }) => {
   try {
-    const res = await fetch(url, {
+    const res = await net.fetch(url, {
       method,
       headers: {
         'Content-Type': 'application/json',
@@ -178,7 +296,7 @@ ipcMain.handle('api', async (_e, { method, url, token, body }) => {
     } catch {}
     return { status: res.status, json }
   } catch (err) {
-    return { status: 0, json: { error: String(err.cause?.code || err.message || err) } }
+    return { status: 0, json: { error: netError(url, err) } }
   }
 })
 
@@ -197,6 +315,7 @@ ipcMain.handle('info', () => ({
   version: app.getVersion(),
   platform: process.platform,
   canHost: process.platform === 'linux', // the Windows host (ddagrab, ViGEm) isn't built yet
+  dev: !app.isPackaged,
   auto: autoConfig(),
 }))
 
@@ -204,6 +323,8 @@ if (dashboardMode) {
   dashboard.start()
 } else {
   app.whenReady().then(() => {
+    loadPins()
+    session.defaultSession.setCertificateVerifyProc(verifyCertificate)
     createWindow()
     updater.setup((s) => send('update', s))
   })

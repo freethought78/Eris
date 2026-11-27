@@ -5,8 +5,25 @@
 // suggests updating the app first ("outdated"); the user can connect anyway.
 import { newer } from './version.js'
 
+// Servers are reached over HTTPS with their own certificate (pinned by the
+// main process; see server/tls.go). address is host:port.
 export function httpBase(address) {
-  return address.includes('://') ? address.replace(/^eris:\/\//, 'http://') : 'http://' + address
+  return 'https://' + address.replace(/^\w+:\/\//, '').replace(/[/#].*$/, '')
+}
+
+// parseLink splits a join link (eris://host:port#fingerprint, or just
+// host[:port]) into the address and the certificate's fingerprint.
+export function parseLink(text) {
+  let t = String(text || '').trim().replace(/^\w+:\/\//, '')
+  let pin = ''
+  const hash = t.indexOf('#')
+  if (hash >= 0) {
+    pin = t.slice(hash + 1).trim()
+    t = t.slice(0, hash)
+  }
+  t = t.replace(/\/+$/, '')
+  if (t && !/:\d+$/.test(t)) t += ':7300'
+  return { address: t, pin }
 }
 
 export function wsUrl(address) {
@@ -25,6 +42,10 @@ export class Conn {
   members = $state([]) // {id, name, role, online}
   live = $state({}) // member id -> {title, since}
   results = $state([]) // newest first
+  rooms = $state([]) // {id, name, private, access, last_id, allowed}
+  chat = $state({}) // room id -> {messages, loading, done}
+  read = $state({}) // room id -> newest message id seen (kept on this PC)
+  maxFileMB = $state(100)
 
   #ws = null
   #retry = null
@@ -32,7 +53,10 @@ export class Conn {
   #handlers = { signal: [], invite: [] }
 
   constructor(entry) {
-    this.entry = entry // {address, token, name}
+    this.entry = entry // {address, token, name, pin}
+    try {
+      this.read = JSON.parse(localStorage.getItem('eris-read:' + entry.address) || '{}')
+    } catch {}
     this.connect()
   }
 
@@ -48,6 +72,13 @@ export class Conn {
     if (info.status !== 200) {
       this.status = 'offline'
       this.error = info.status === 0 ? `Can't reach the server (${info.json?.error || 'no answer'}). Trying again...` : ''
+      if (info.status === 0) {
+        // A server from before encryption answers plain HTTP only.
+        const old = await window.eris.api({ method: 'GET', url: httpBase(this.entry.address).replace(/^https/, 'http') + '/api/info' })
+        if (old.status === 200 && !old.json?.encrypted) {
+          this.error = `This server runs Eris ${old.json?.version || '(old)'}, from before encryption. It updates itself within the hour, or its owner can update it now. Trying again...`
+        }
+      }
       this.#later()
       return
     }
@@ -117,6 +148,92 @@ export class Conn {
     if (r.status === 200 && Array.isArray(r.json)) this.results = r.json
   }
 
+  // --- Rooms and chat ---
+
+  room(id) {
+    return this.rooms.find((r) => r.id === id)
+  }
+
+  unread(room) {
+    return room.access && room.last_id > (this.read[room.id] || 0)
+  }
+
+  markRead(id) {
+    const r = this.room(id)
+    if (!r || !r.access || (this.read[id] || 0) >= r.last_id) return
+    this.read[id] = r.last_id
+    try {
+      localStorage.setItem('eris-read:' + this.entry.address, JSON.stringify(this.read))
+    } catch {}
+  }
+
+  // loadMore loads a room's older messages (the newest first time).
+  async loadMore(id) {
+    if (!this.chat[id]) this.chat[id] = { messages: [], loading: false, done: false }
+    const c = this.chat[id] // the state's own copy (what was assigned is copied into it)
+    if (c.loading || c.done) return
+    c.loading = true
+    const before = c.messages[0]?.id || 0
+    const r = await window.eris.api({
+      method: 'GET',
+      url: `${httpBase(this.entry.address)}/api/rooms/${id}/messages?limit=50&before=${before}`,
+      token: this.entry.token,
+    })
+    c.loading = false
+    if (r.status !== 200 || !Array.isArray(r.json)) {
+      this.error = r.json?.error || `Couldn't load the room's messages (${r.status}).`
+      return
+    }
+    const have = new Set(c.messages.map((m) => m.id))
+    c.messages = [...r.json.filter((m) => !have.has(m.id)), ...c.messages]
+    if (r.json.length < 50) c.done = true
+  }
+
+  sendMessage(roomId, text, files = []) {
+    this.send({ type: 'message', room_id: roomId, text, files })
+  }
+
+  editMessage(id, text) {
+    this.send({ type: 'edit', id, text })
+  }
+
+  deleteMessage(id) {
+    this.send({ type: 'delete', id })
+  }
+
+  unlock(id, password) {
+    this.send({ type: 'room-unlock', id, password })
+  }
+
+  createRoom(room) {
+    this.send({ type: 'room-create', room })
+  }
+
+  updateRoom(id, room) {
+    this.send({ type: 'room-update', id, room })
+  }
+
+  deleteRoom(id) {
+    this.send({ type: 'room-delete', id })
+  }
+
+  fileUrl(id) {
+    return `${httpBase(this.entry.address)}/api/files/${id}`
+  }
+
+  // upload sends a file to the server, for a message; it gives back its info.
+  async upload(file) {
+    if (file.size > this.maxFileMB * 1024 * 1024) throw new Error(`${file.name} is over this server's ${this.maxFileMB} MB limit.`)
+    const r = await window.eris.upload({
+      url: `${httpBase(this.entry.address)}/api/files?name=${encodeURIComponent(file.name)}`,
+      token: this.entry.token,
+      type: file.type,
+      data: await file.arrayBuffer(),
+    })
+    if (r.status !== 200) throw new Error(r.json?.error || `The upload failed (${r.status}).`)
+    return r.json
+  }
+
   async postResult(testId, side, summary) {
     return window.eris.api({
       method: 'POST',
@@ -136,8 +253,33 @@ export class Conn {
         this.serverName = m.server?.name || ''
         this.members = m.members
         this.live = Object.fromEntries((m.live || []).map((l) => [l.member_id, l]))
+        this.maxFileMB = m.server?.max_file_mb || 100
+        this.rooms = m.rooms || []
+        this.chat = {} // reloaded when shown: messages may have come and gone while away
         this.loadResults()
         break
+      case 'rooms':
+        this.rooms = m.rooms
+        for (const r of m.rooms) if (!r.access) delete this.chat[r.id]
+        break
+      case 'message': {
+        const r = this.room(m.message.room_id)
+        if (r && m.message.id > r.last_id) r.last_id = m.message.id
+        const c = this.chat[m.message.room_id]
+        if (c) c.messages.push(m.message)
+        break
+      }
+      case 'message-edit': {
+        const c = this.chat[m.message.room_id]
+        const i = c ? c.messages.findIndex((x) => x.id === m.message.id) : -1
+        if (i >= 0) c.messages[i] = m.message
+        break
+      }
+      case 'message-delete': {
+        const c = this.chat[m.room_id]
+        if (c) c.messages = c.messages.filter((x) => x.id !== m.id)
+        break
+      }
       case 'presence': {
         const i = this.members.findIndex((x) => x.id === m.member.id)
         const entry = { ...m.member, online: m.online }

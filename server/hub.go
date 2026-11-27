@@ -21,6 +21,11 @@ import (
 //	{"type":"live","on":true,"title":"..."}          start or stop streaming
 //	{"type":"signal","to":ID,"data":...}             to another member's app
 //	{"type":"test-invite","to":ID,"test_id":"...","seconds":N}
+//	{"type":"message","room_id":ID,"text":"...","files":["id",...]}
+//	{"type":"edit","id":ID,"text":"..."}  {"type":"delete","id":ID}
+//	{"type":"room-unlock","id":ID,"password":"..."}
+//	{"type":"room-create","room":{name,private,password,allowed}}  (owner and admins)
+//	{"type":"room-update","id":ID,"room":{...}}  {"type":"room-delete","id":ID}
 //
 // and to the app:
 //
@@ -30,6 +35,12 @@ import (
 //	{"type":"signal","from":ID,"data":...}
 //	{"type":"test-invite","from":ID,"test_id":"...","seconds":N}
 //	{"type":"test-result","result":{...}}
+//	{"type":"message","message":{...}}  {"type":"message-edit","message":{...}}
+//	{"type":"message-delete","id":ID,"room_id":ID}
+//	{"type":"rooms","rooms":[...]}  (each member's own view: which they can go in)
+//	{"type":"error","error":"..."}
+//
+// The hello also carries "rooms" (see chat.go).
 
 type client struct {
 	m    Member
@@ -125,8 +136,12 @@ func (h *Hub) hello(you Member) ([]byte, error) {
 		live = append(live, l)
 	}
 	st := h.store.Settings()
-	return encode(map[string]any{"type": "hello", "you": you, "members": view, "live": live,
-		"server": map[string]any{"name": st.Name, "version": version}}), nil
+	rooms, err := h.store.Rooms(you)
+	if err != nil {
+		return nil, err
+	}
+	return encode(map[string]any{"type": "hello", "you": you, "members": view, "live": live, "rooms": rooms,
+		"server": map[string]any{"name": st.Name, "version": version, "max_file_mb": st.maxFile() >> 20}}), nil
 }
 
 func (h *Hub) add(c *client) {
@@ -169,6 +184,110 @@ type inMsg struct {
 	Data    json.RawMessage `json:"data"`
 	TestID  string          `json:"test_id"`
 	Seconds int             `json:"seconds"`
+
+	ID       int64        `json:"id"`
+	RoomID   int64        `json:"room_id"`
+	Text     string       `json:"text"`
+	Name     string       `json:"name"`
+	Files    []string     `json:"files"`
+	Password string       `json:"password"`
+	Room     RoomSettings `json:"room"`
+}
+
+// toRoom sends msg to every connected member who can go in the room.
+func (h *Hub) toRoom(roomID int64, msg []byte) {
+	h.mu.Lock()
+	ids := make([]int64, 0, len(h.clients))
+	for id := range h.clients {
+		ids = append(ids, id)
+	}
+	h.mu.Unlock()
+	for _, id := range ids {
+		if m, ok := h.store.ByID(id); ok && h.store.CanAccess(m, roomID) {
+			h.toMember(id, msg)
+		}
+	}
+}
+
+// sendRooms gives every connected member their own view of the rooms.
+func (h *Hub) sendRooms() {
+	h.mu.Lock()
+	ids := make([]int64, 0, len(h.clients))
+	for id := range h.clients {
+		ids = append(ids, id)
+	}
+	h.mu.Unlock()
+	for _, id := range ids {
+		h.sendRoomsTo(id)
+	}
+}
+
+func (h *Hub) sendRoomsTo(id int64) {
+	m, ok := h.store.ByID(id)
+	if !ok {
+		return
+	}
+	if rooms, err := h.store.Rooms(m); err == nil {
+		h.toMember(id, encode(map[string]any{"type": "rooms", "rooms": rooms}))
+	}
+}
+
+// chat handles the chat messages from an app.
+func (h *Hub) chat(c *client, in inMsg) {
+	fail := func(err error) { c.send <- encode(map[string]any{"type": "error", "error": err.Error()}) }
+	switch in.Type {
+	case "message":
+		if len(in.Files) > 10 {
+			fail(errors.New("up to 10 files per message"))
+			return
+		}
+		m, err := h.store.AddMessage(c.m, in.RoomID, in.Text, in.Files)
+		if err != nil {
+			fail(err)
+			return
+		}
+		h.toRoom(m.RoomID, encode(map[string]any{"type": "message", "message": m}))
+	case "edit":
+		m, err := h.store.EditMessage(c.m, in.ID, in.Text)
+		if err != nil {
+			fail(err)
+			return
+		}
+		h.toRoom(m.RoomID, encode(map[string]any{"type": "message-edit", "message": m}))
+	case "delete":
+		m, err := h.store.DeleteMessage(c.m, in.ID)
+		if err != nil {
+			fail(err)
+			return
+		}
+		h.toRoom(m.RoomID, encode(map[string]any{"type": "message-delete", "id": m.ID, "room_id": m.RoomID}))
+	case "room-unlock":
+		if err := h.store.Unlock(c.m, in.ID, in.Password); err != nil {
+			time.Sleep(time.Second) // slows down guessing
+			fail(err)
+			return
+		}
+		h.sendRoomsTo(c.m.ID)
+	case "room-create", "room-update", "room-delete":
+		if c.m.Role != "owner" && c.m.Role != "admin" {
+			fail(errors.New("only the owner and admins change rooms"))
+			return
+		}
+		var err error
+		switch in.Type {
+		case "room-create":
+			_, err = h.store.CreateRoom(in.Room)
+		case "room-update":
+			err = h.store.UpdateRoom(in.ID, in.Room)
+		default:
+			err = h.store.DeleteRoom(in.ID)
+		}
+		if err != nil {
+			fail(err)
+			return
+		}
+		h.sendRooms()
+	}
 }
 
 func (h *Hub) handle(c *client, in inMsg) {
@@ -190,6 +309,8 @@ func (h *Hub) handle(c *client, in inMsg) {
 		h.toMember(in.To, encode(map[string]any{"type": "test-invite", "from": c.m.ID, "test_id": in.TestID, "seconds": in.Seconds}))
 	case "ping":
 		c.send <- encode(map[string]any{"type": "pong"})
+	case "message", "edit", "delete", "room-unlock", "room-create", "room-update", "room-delete":
+		h.chat(c, in)
 	}
 }
 

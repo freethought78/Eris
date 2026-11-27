@@ -22,6 +22,22 @@ What it does now:
   Presence, who's live, connection setup between two members' streaming
   helpers (`signal`), and stream test invitations. The message types are at
   the top of `hub.go`.
+- **Rooms** (DESIGN.md 4.3): text chat now, voice later. A new server has a
+  Lobby; the owner and admins add, change and remove rooms, which can be
+  private by password or by a members list (enforced on history, messages and
+  files). History: `GET /api/rooms/{id}/messages?before=ID`; messages, edits,
+  deletes and room changes go over the live connection (see `hub.go`).
+- **Files:** `POST /api/files?name=...` (the body is the file), then sent with a
+  message; `GET /api/files/{id}` serves it (common pictures inline, everything
+  else as a download). `settings.json` has `message_retention_days` (30; 0 =
+  messages aren't stored), `file_retention_days` (30), `max_file_mb` (100) and
+  `max_storage_gb` (10); an hourly cleanup applies them, removes uploads never
+  sent, and the oldest files when storage is full.
+- **Encryption:** HTTPS and WSS with the server's own certificate (made on first
+  run, in `tls/`); the join link it prints, `eris://host:7300#fingerprint`,
+  carries the certificate's fingerprint, so give members the whole link. Plain
+  HTTP on the same port answers only `/api/info`, for apps from before
+  encryption to see they need updating.
 - **Stream test results:** `POST /api/tests` (each side posts its own summary)
   and `GET /api/tests`. Each result is also written to `eris-data/tests/` as a
   JSON file, so it can be read without the app.

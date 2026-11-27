@@ -1,10 +1,14 @@
 <script>
   import { onMount } from 'svelte'
-  import { Conn, join } from './lib/conn.svelte.js'
+  import { Conn, join, parseLink } from './lib/conn.svelte.js'
   import { stream } from './lib/stream.svelte.js'
   import { update } from './lib/update.svelte.js'
   import AddServer from './lib/AddServer.svelte'
   import Results from './lib/Results.svelte'
+  import Rooms from './lib/Rooms.svelte'
+  import Chat from './lib/Chat.svelte'
+  import Members from './lib/Members.svelte'
+  import RoomDialog from './lib/RoomDialog.svelte'
   import logo from '../build/icon.svg'
 
   let servers = $state([]) // saved: {address, token, name, role}
@@ -15,6 +19,10 @@
   let info = $state({ canHost: false, version: '' })
 
   let conn = $derived(selected ? conns[selected] : null)
+  let roomSel = $state({}) // server address -> the room shown
+  let view = $state('chat') // chat or tests
+  let roomDialog = $state(null) // {room} while adding or changing a room
+  let room = $derived(conn ? conn.rooms.find((r) => r.id === roomSel[conn.entry.address]) || conn.rooms[0] : null)
 
   function connect(entry) {
     const c = new Conn(entry)
@@ -64,13 +72,40 @@
       }, 500)
     }
     if (!a.join) return
-    if (!servers.some((s) => s.address === a.join.address)) {
-      const r = await join(a.join.address, a.join.name, a.join.password || '', a.join.ownerCode || '')
-      await added({ address: a.join.address, token: r.token, name: r.member.name, role: r.member.role })
+    const { address, pin } = parseLink(a.join.link || a.join.address)
+    if (!servers.some((s) => s.address === address)) {
+      await window.eris.pin(address, pin)
+      const r = await join(address, a.join.name, a.join.password || '', a.join.ownerCode || '')
+      await added({ address, pin, token: r.token, name: r.member.name, role: r.member.role })
     }
-    const c = conns[a.join?.address || selected]
+    const c = conns[address]
     const until = (f) => new Promise((res) => { const t = setInterval(() => { if (f()) { clearInterval(t); res() } }, 200) })
     await until(() => c.status === 'online')
+    if (a.say || a.expect) {
+      // Chat: send a message (and a small file) to the first room, and wait
+      // for the other copy's.
+      await until(() => c.rooms.length > 0)
+      const r = c.rooms[0]
+      await until(() => c.chat[r.id])
+      if (a.say) {
+        const f = await c.upload(new File([`file from ${a.join.name}`], `${a.join.name}.txt`, { type: 'text/plain' }))
+        // and a small picture, to see pictures show in place
+        const cv = Object.assign(document.createElement('canvas'), { width: 160, height: 90 })
+        const g = cv.getContext('2d')
+        g.fillStyle = '#e94560'
+        g.fillRect(0, 0, 160, 90)
+        g.fillStyle = '#fff'
+        g.font = 'bold 28px sans-serif'
+        g.fillText(a.join.name, 12, 56)
+        const png = await new Promise((res) => cv.toBlob(res, 'image/png'))
+        const p = await c.upload(new File([png], `${a.join.name}.png`, { type: 'image/png' }))
+        c.sendMessage(r.id, a.say, [f.id, p.id])
+      }
+      if (a.expect) {
+        await until(() => c.chat[r.id]?.messages.some((m) => m.text === a.expect && m.files.length === 2))
+        console.info(`auto test: got "${a.expect}" with its file`)
+      }
+    }
     if (a.live) stream.goLive(c, { extraArgs: a.hostArgs })
     if (a.watch) {
       // Join a member's stream as soon as they're live (a plain join, no test).
@@ -86,7 +121,6 @@
     }
   }
 
-  let others = $derived(conn ? conn.members.filter((m) => m.id !== conn.you?.id) : [])
 </script>
 
 {#if update.state === 'available' || update.state === 'downloading' || update.state === 'ready'}
@@ -114,19 +148,19 @@
     <button class="icon add" title="Add a server" onclick={() => ((addInitial = {}), (adding = true))}>+</button>
   </nav>
 
-  <main>
-    {#if !conn}
-      <div class="empty">
-        <img src={logo} alt="" width="96" height="96" />
-        <h1>Eris</h1>
-        <p class="muted">Add a server to start: the address and your name. The server's host gives you the address.</p>
-        <button class="primary" onclick={() => (adding = true)}>Add a server</button>
-      </div>
-    {:else}
+  {#if !conn}
+    <main class="empty">
+      <img src={logo} alt="" width="96" height="96" />
+      <h1>Eris</h1>
+      <p class="muted">Add a server to start: paste the join link its owner gave you, and your name.</p>
+      <button class="primary" onclick={() => (adding = true)}>Add a server</button>
+    </main>
+  {:else}
+    <div class="server">
       <header>
-        <div>
-          <h1>{conn.serverName || conn.entry.address}</h1>
-          <span class="muted">{conn.entry.address} · you are {conn.you?.name || conn.entry.name}{conn.you?.role === 'owner' ? ' (owner)' : ''} · {conn.status}{conn.serverVersion ? ` · server ${conn.serverVersion}` : ''} · app {info.version}</span>
+        <div class="title">
+          <h1>{conn.serverName || conn.entry.address}{#if info.dev}<span class="devtag" title="Built from the source folder (tools/dev.sh), not a release">DEV</span>{/if}</h1>
+          <span class="muted">you are {conn.you?.name || conn.entry.name}{conn.you?.role === 'owner' ? ' (owner)' : ''} · {conn.status}{conn.serverVersion ? ` · server ${conn.serverVersion}` : ''} · app {info.version}</span>
         </div>
         <div class="actions">
           {#if info.canHost}
@@ -141,7 +175,7 @@
       </header>
 
       {#if conn.status === 'outdated'}
-        <div class="outdated">
+        <div class="banner warn">
           <p>
             This server has been updated to Eris <b>{conn.serverVersion}</b>, and you have {info.version}. Update
             Eris before reconnecting, so everything works together.
@@ -165,43 +199,42 @@
           </div>
         </div>
       {/if}
-      {#if conn.error}<p class="error">{conn.error}</p>{/if}
-      {#if stream.notice}<p class="notice">{stream.notice}</p>{/if}
+      {#if conn.error}
+        <div class="banner bad">{conn.error} <button class="x" onclick={() => (conn.error = '')}>×</button></div>
+      {/if}
+      {#if stream.notice}
+        <div class="banner">{stream.notice} <button class="x" onclick={() => (stream.notice = '')}>×</button></div>
+      {/if}
 
-      <section>
-        <h2>Members</h2>
-        <ul class="members">
-          {#each others as m (m.id)}
-            <li>
-              <span class="dot {m.online ? 'online' : 'offline'}"></span>
-              <span class="name">{m.name}</span>
-              {#if m.role !== 'member'}<span class="muted">{m.role}</span>{/if}
-              {#if conn.live[m.id]}
-                <span class="live">LIVE</span>
-                <span class="muted">{conn.live[m.id].title}</span>
-                {#if stream.playing?.hostId === m.id}
-                  <button onclick={() => stream.leave()}>Leave</button>
-                {:else}
-                  <button class="primary" onclick={() => stream.join(conn, m.id)}>Join</button>
-                {/if}
-              {/if}
-              {#if stream.hosting && m.online}
-                <button onclick={() => stream.testWith(conn, m.id, 60)} title="They join your stream for 60 s; both sides' results come back here">Stream test</button>
-              {/if}
-            </li>
-          {:else}
-            <li class="muted">Nobody else has joined yet. Give them the address: {conn.entry.address}</li>
-          {/each}
-        </ul>
-      </section>
-
-      <section>
-        <h2>Stream tests</h2>
-        <Results results={conn.results} />
-      </section>
-    {/if}
-  </main>
+      <div class="body">
+        <Rooms
+          {conn}
+          selected={room?.id}
+          {view}
+          onview={(v) => (view = v)}
+          onselect={(id) => ((roomSel[conn.entry.address] = id), (view = 'chat'))}
+          onedit={(r) => (roomDialog = { room: r })}
+          oncreate={() => (roomDialog = { room: null })}
+        />
+        {#if view === 'tests'}
+          <section class="tests">
+            <h2>Stream tests</h2>
+            <Results results={conn.results} />
+          </section>
+        {:else if room}
+          {#key room.id}<Chat {conn} {room} />{/key}
+        {:else}
+          <section class="tests muted">{conn.status === 'online' ? 'No rooms yet.' : 'Connecting...'}</section>
+        {/if}
+        <Members {conn} />
+      </div>
+    </div>
+  {/if}
 </div>
+
+{#if roomDialog}
+  <RoomDialog {conn} room={roomDialog.room} onclose={() => (roomDialog = null)} />
+{/if}
 
 {#if adding}
   <AddServer initial={addInitial} onadded={added} oncancel={() => (adding = false)} />
@@ -210,25 +243,27 @@
 <style>
   .layout { display: flex; height: 100%; }
   .updatebar { background: var(--accent); padding: 8px 16px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--border); }
-  .outdated { background: var(--surface-2); border-left: 3px solid var(--warn); padding: 10px 14px; border-radius: var(--radius); margin: 12px 0; }
-  .outdated p { margin: 0 0 8px; }
-  .servers { width: 64px; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px 0; }
+  .servers { width: 64px; background: var(--bg); border-right: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px 0; flex: none; }
   .icon { position: relative; width: 44px; height: 44px; border-radius: 14px; padding: 0; text-transform: uppercase; font-weight: 600; }
   .icon.sel { background: var(--highlight); }
   .icon.add { background: var(--surface-2); font-size: 20px; }
   .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
-  .icon .dot { position: absolute; right: -1px; bottom: -1px; border: 2px solid var(--surface); width: 12px; height: 12px; }
+  .icon .dot { position: absolute; right: -1px; bottom: -1px; border: 2px solid var(--bg); width: 12px; height: 12px; }
   .dot.online { background: var(--good); }
   .dot.connecting { background: var(--warn); }
   .dot.rejected { background: var(--highlight); }
-  main { flex: 1; overflow: auto; padding: 16px 24px; }
-  header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
-  h1 { margin: 0 0 4px; font-size: 20px; }
-  .actions { display: flex; gap: 8px; }
-  .empty { max-width: 420px; margin: 18vh auto; text-align: center; display: grid; gap: 12px; justify-items: center; }
-  .notice { background: var(--surface-2); border-left: 3px solid var(--highlight); padding: 8px 12px; border-radius: var(--radius); }
-  .members { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
-  .members li { display: flex; align-items: center; gap: 10px; padding: 6px 8px; background: var(--surface); border-radius: var(--radius); }
-  .name { font-weight: 600; }
-  .live { background: var(--highlight); color: white; font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 4px; }
+  .server { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  header { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--surface); }
+  .title { min-width: 0; }
+  h1 { margin: 0 0 2px; font-size: 18px; }
+  .title .muted { font-size: 12px; }
+  .devtag { background: var(--warn); color: #1a1a2e; font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 4px; margin-left: 8px; vertical-align: middle; }
+  .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .banner { background: var(--surface-2); border-left: 3px solid var(--highlight); padding: 8px 12px; margin: 8px 12px 0; border-radius: var(--radius); display: flex; align-items: center; gap: 8px; }
+  .banner.warn { border-left-color: var(--warn); display: block; }
+  .banner.warn p { margin: 0 0 8px; }
+  .banner .x { margin-left: auto; background: none; border: none; padding: 0 6px; }
+  .body { flex: 1; display: flex; min-height: 0; }
+  .tests { flex: 1; overflow: auto; padding: 16px 24px; }
+  .empty { flex: 1; max-width: 420px; margin: 18vh auto; text-align: center; display: grid; gap: 12px; justify-items: center; align-content: start; }
 </style>

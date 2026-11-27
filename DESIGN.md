@@ -137,8 +137,14 @@ A cleanup job runs hourly and deletes anything past its retention.
 
 ### 3.4 How the app talks to the server
 
+- **Encrypted** (since 2026-11-26): the server makes its own certificate, and the join link
+  (`eris://host:port#fingerprint`) carries its fingerprint, so the app trusts exactly that
+  certificate, with no domain name or certificate authority. A server added without the
+  fingerprint is trusted the first time it's seen; a different certificate later is
+  refused. The port still answers plain HTTP for `/api/info` only, so older apps learn the
+  server is newer and offer to update.
 - **WebSocket** for everything live: new messages, edits, deletes, presence, who's in which
-  voice channel, typing, Go Live and Play Together signalling.
+  room's voice, typing, Go Live and Play Together signalling.
 - **HTTP** for everything bulk: message history (paged), file upload and download
   (streamed straight to and from disk), and LiveKit access tokens.
 - Messages are JSON. Formats are defined in code as we build, not here.
@@ -149,7 +155,7 @@ A cleanup job runs hourly and deletes anything past its retention.
 
 ### 4.1 Layout
 
-The familiar four columns: server icons on the far left, the selected server's channels,
+The familiar four columns: server icons on the far left, the selected server's rooms,
 the chat or voice view in the middle, the member list on the right. A user panel at the
 bottom of the channel list holds mute, deafen and settings.
 
@@ -162,13 +168,33 @@ bottom of the channel list holds mute, deafen and settings.
 - Stored locally: address, member token, display name, order, per-server notification
   setting.
 
-### 4.3 Text channels
+### 4.3 Rooms (decided 2026-11-26)
 
-Send, history with infinite scroll, attachments (images show inline, other files as a
-download card), edit and delete your own messages, mentions with notification badges, and
-unread markers.
+Calls and chat work like TeamSpeak, in a Discord-like interface: everything happens in
+**rooms**, and each room has both a text chat and voice. There are no direct calls between
+two members; these servers are already private communities.
 
-### 4.4 Voice channels
+- **Reading and talking are separate.** Clicking a room shows its chat; joining its voice is
+  a deliberate action (double-click or "Join voice"). You can talk in one room while
+  reading another.
+- **The owner and admins** create, change and remove rooms. A server always has at least
+  one (a new server starts with Lobby).
+- **Private rooms**, shown with a lock: by **password** (anyone who gives it once is in from
+  then on; a new password locks everyone out again) or by **members list** (the owner
+  picks who). The owner and admins can always go in. The server enforces it everywhere:
+  history, new messages and files never reach anyone not allowed.
+- **Text:** send, history that loads as you scroll up, attachments (pictures show in place,
+  other files as a download card), edit and delete your own messages (the owner and
+  admins can delete any), unread markers. Later: mentions with notification badges.
+- **Later:** who's in each room's voice shown under it in the room list, TeamSpeak-style,
+  with speaking lights; Go Live and Play Together happen in the room you're in;
+  temporary private rooms anyone can open (gone when empty) for one-to-one talks; moving
+  or kicking someone out of a room, room size limits, an away room.
+
+Built so far: rooms with text, files and both kinds of privacy (server/chat.go,
+server/rooms.go; app/src/lib/Chat.svelte). Messages and files travel encrypted (3.4).
+
+### 4.4 Voice in rooms
 
 Join and leave, mute, deafen, push-to-talk with a global hotkey (works while a game has
 focus), speaking indicators, per-person volume, cameras. Voice uses the microphone through
@@ -371,8 +397,13 @@ nobody wants to help. So before more remote tests:
 
 ### Phase 1 — Server and text
 
-eris-server with SQLite, member tokens, roles, text channels, history, attachments,
-retention. App shell with server list, `eris://` links, chat, member list, unread badges.
+eris-server with SQLite, member tokens, roles, rooms (4.3), history, attachments,
+retention, encryption. App shell with server list, `eris://` links, chat, member list,
+unread badges. *Mostly done (2026-11-26):* everything but `eris://` links and mentions.
+
+From 2026-11-26 the main focus is the app's everyday features (this phase, then voice and
+cameras), so Eris looks and works like the final product sooner. Streaming work goes on
+until its quality is agreed to be good enough, but isn't the main focus.
 
 ### Phase 2 — Voice
 

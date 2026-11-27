@@ -25,6 +25,49 @@ type Settings struct {
 	// OwnerCode is printed on first run; the first person to join with it
 	// becomes the owner, and it's cleared.
 	OwnerCode string `json:"owner_code,omitempty"`
+
+	// Retention and limits (DESIGN.md 3.3); missing means the default.
+	MessageRetentionDays *int `json:"message_retention_days,omitempty"` // 0: don't store messages
+	FileRetentionDays    *int `json:"file_retention_days,omitempty"`
+	MaxFileMB            int  `json:"max_file_mb,omitempty"`
+	MaxStorageGB         int  `json:"max_storage_gb,omitempty"`
+}
+
+func orDefault(p *int, d int) int {
+	if p == nil || *p < 0 {
+		return d
+	}
+	return *p
+}
+
+func (s Settings) messageRetention() int { return orDefault(s.MessageRetentionDays, 30) }
+func (s Settings) fileRetention() int    { return orDefault(s.FileRetentionDays, 30) }
+
+func (s Settings) maxFile() int64 {
+	if s.MaxFileMB <= 0 {
+		return 100 << 20
+	}
+	return int64(s.MaxFileMB) << 20
+}
+
+func (s Settings) maxStorage() int64 {
+	if s.MaxStorageGB <= 0 {
+		return 10 << 30
+	}
+	return int64(s.MaxStorageGB) << 30
+}
+
+// withDefaults writes the defaults in, so the host sees what they can change.
+func (s Settings) withDefaults() Settings {
+	m, f := s.messageRetention(), s.fileRetention()
+	s.MessageRetentionDays, s.FileRetentionDays = &m, &f
+	if s.MaxFileMB <= 0 {
+		s.MaxFileMB = 100
+	}
+	if s.MaxStorageGB <= 0 {
+		s.MaxStorageGB = 10
+	}
+	return s
 }
 
 // Member is someone who has joined.
@@ -108,6 +151,16 @@ func Open(dir string) (*Store, bool, error) {
 			return nil, false, fmt.Errorf("settings.json: %w", err)
 		}
 	}
+	if d := s.settings.withDefaults(); d.MessageRetentionDays != nil && (s.settings.MessageRetentionDays == nil ||
+		s.settings.FileRetentionDays == nil || s.settings.MaxFileMB <= 0 || s.settings.MaxStorageGB <= 0) {
+		s.settings = d
+		if err := s.saveSettings(); err != nil {
+			return nil, false, err
+		}
+	}
+	if err := s.initChat(); err != nil {
+		return nil, false, err
+	}
 	return s, first, nil
 }
 
@@ -164,6 +217,14 @@ func (s *Store) Join(name, password, ownerCode string) (Member, string, error) {
 func (s *Store) ByToken(token string) (Member, bool) {
 	var m Member
 	err := s.db.QueryRow(`SELECT id, name, role, joined FROM members WHERE token_hash = ?`, hashToken(token)).
+		Scan(&m.ID, &m.Name, &m.Role, &m.Joined)
+	return m, err == nil
+}
+
+// ByID finds a member.
+func (s *Store) ByID(id int64) (Member, bool) {
+	var m Member
+	err := s.db.QueryRow(`SELECT id, name, role, joined FROM members WHERE id = ?`, id).
 		Scan(&m.ID, &m.Name, &m.Role, &m.Joined)
 	return m, err == nil
 }
