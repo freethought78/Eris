@@ -22,6 +22,9 @@
     </div>
   {/each}
   <div class="spacer"></div>
+  {#if conn.you?.role === 'owner'}
+    <button class="tests" class:sel={view === 'server'} onclick={() => onview(view === 'server' ? 'chat' : 'server')}>Server</button>
+  {/if}
   <button class="tests" class:sel={view === 'tests'} onclick={() => onview(view === 'tests' ? 'chat' : 'tests')}>Stream tests</button>
 </div>
 

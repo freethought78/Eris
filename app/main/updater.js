@@ -1,7 +1,8 @@
-// Live updates (DESIGN.md section 6, "Order, revised"): the app checks Eris's
-// GitHub releases at start-up and every 6 hours, says when there's a newer
-// version, and on the user's word downloads it and restarts into it. The same
-// way as FT Assistant: it asks; it never updates behind the user's back.
+// Live updates (DESIGN.md section 6, "Order, revised"): the app follows its
+// servers. It checks Eris's GitHub releases when a server it connects to is
+// newer than it (conn.svelte.js), or when asked (Check for updates), says
+// when there's a newer version, and on the user's word downloads it and
+// restarts into it. It asks; it never updates behind the user's back.
 //
 // Works in the Windows installer's copy and in the Linux AppImage. A copy run
 // from the source folder doesn't update (its state is "dev"). ERIS_UPDATE_URL
@@ -48,8 +49,7 @@ function setup(sendFn) {
   autoUpdater.on('download-progress', (p) => set({ ...state, state: 'downloading', percent: Math.round(p.percent) }))
   autoUpdater.on('update-downloaded', (i) => set({ state: 'ready', version: i.version }))
   autoUpdater.on('error', (err) => set({ state: 'error', error: String(err.message || err) }))
-  setTimeout(check, 3000)
-  setInterval(check, 6 * 60 * 60 * 1000)
+  if (!canUpdate()) set({ state: 'dev' })
 }
 
 module.exports = {

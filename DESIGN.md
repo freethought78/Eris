@@ -105,6 +105,14 @@ On first run it:
 3. Prints the address to share and a one-time **owner code**. The first person to join with
    that code becomes the owner.
 
+**From the app (decided 2026-11-27):** one icon for everyone. The app starts its host's
+server in a terminal window of its own, which shows its status and stops the server when
+closed, and keeps running when the app closes. Everything else (status, log, stop,
+restart, checking for updates, which updates server and app together) is in the app:
+Host on the PC that runs it, Server for the owner from anywhere. The server updates itself
+(hourly, restarting when nobody is streaming, or at once when asked); the app follows its
+servers' versions. See app/README.md, "Hosting a server".
+
 **Ports:** one TCP port (default `7300`) for HTTP and WebSocket, including LiveKit's
 signalling, which eris-server proxies. One UDP port (default `7301`) for all media, using
 LiveKit's single-port mode. The host forwards those two ports. That's all.

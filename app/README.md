@@ -59,27 +59,46 @@ new connection while the old one was still closing. Each helper run now has
 its own number in the app, a stopped helper ends its run and reports, and
 the host replaces a member's old session when they connect again.
 
-## Server dashboard
+## Hosting a server
 
-`Eris --server` (or `npx electron . --server` from the source folder) runs
-this PC's eris-server in a small window: running or not, the join link, the
-owner code until it's used, the version, the data folder and the server's
-log, with **Check for updates** (installs a newer server straight away),
-**Restart** and **Stop server**. The server lives exactly as long
-as the window: closing the window stops it (cleanly: members' apps are told
-and reconnect when it's back), and the server runs with `-exit-with-stdin`,
-so if the dashboard dies any other way its stdin closes and it stops too.
-Only one dashboard runs at a time; starting another shows the first.
+Everything is done from the app; the server itself is just a terminal
+window. **Host** (the ⌂ at the bottom of the server list) shows the server on
+this PC: **Start server** opens it in its own terminal window (gnome-terminal,
+konsole, xterm... on Linux; a console on Windows), which stays open as long as
+it runs and keeps running when the app closes. Closing that window stops the
+server, cleanly. The window shows the join link, the owner code until it's
+used, a status line (who's online, streaming, updates) and the log; typing
+`update` there checks for a newer server.
 
-The server updates itself (see server/README.md), so the dashboard runs a
-copy it can replace, `~/.config/Eris-server/bin/eris-server`. The Linux
-AppImage carries a server too (`resources/server/eris-server`) and puts it
-there when it's newer than the copy. The dashboard shows a downloaded update
-that's waiting for nobody to be streaming. From the source folder it runs
-`../server/bin/eris-server`.
-Settings are in `~/.config/Eris-server/dashboard.json`: `data` (default
-`~/.config/Eris-server/server-data`), `addr` (`:7300`) and `public` (the
-name in the join link); its log is `logs/server.log` there.
+While it runs, Host shows its version, uptime, who's online, its update
+state, the join link (with Copy), the owner code and its log, with **Check
+for updates**, **Restart** and **Stop server**. Check for updates updates
+the server (it installs a newer one and restarts straight away) and the app
+together. If the server isn't in your list yet, **Join it** fills in its link
+and owner code. Owners get the same view for their server from any PC under
+**Server**, at the bottom of the rooms list (everything but Start, which only
+works on the PC the server runs on). A server from before these controls
+(0.1.4 and older) shows as running but can't be controlled until it updates.
+
+The app talks to this PC's server with the control token the server leaves in
+its data folder (readable only by this PC's user) and trusts only the
+certificate in that folder; owners elsewhere use their member token (see
+server/control.go).
+
+The server updates itself, so it runs from a copy it can replace,
+`~/.config/Eris-server/bin/eris-server`, which the app refreshes from the
+server it carries (Linux AppImage: `resources/server/eris-server`) when that's
+newer. From the source folder it runs `../server/bin/eris-server`. Settings
+are in `~/.config/Eris-server/host.json`: `data` (default
+`~/.config/Eris-server/server-data`), `addr` (`:7300`) and `public` (the name
+in the join link).
+
+`Eris --server` starts the server in its window and exits, without the app:
+for a desktop shortcut that starts only the server.
+
+The app no longer checks for its own updates on a timer: it follows its
+servers. It checks when a server it connects to is newer, and when you press
+Check for updates.
 
 ## Icon
 
@@ -90,6 +109,26 @@ and the pentagon with its 23 on the other. `build/icon.svg` is the source;
 program, installer and shortcuts).
 
 Helper logs: `~/.config/Eris/logs/` (the app's own data folder).
+
+## Installing
+
+- **Windows:** download `Eris-Setup-<version>.exe` from the releases page and
+  run it. It installs for you only (no admin), with Start menu and desktop
+  icons. Not code-signed yet, so Windows asks first ("More info", "Run
+  anyway").
+- **Linux:** download `Eris-<version>.AppImage` from the releases page, put it
+  wherever you keep programs, make it runnable (Properties, "Executable as
+  Program", or `chmod +x`), and run it. It adds Eris to the app menu and puts
+  an icon on the desktop the first time (delete it if you don't want it; it
+  isn't made again), and keeps both pointing at the AppImage when it updates
+  itself (`main/linux-install.js`). Host can also put an **Eris Server** icon
+  on the desktop, which starts only the server.
+- **Updates:** the app offers them when a server it connects to has a newer
+  version, or when you press Check for updates (Host, or Server for owners);
+  it downloads and restarts into the new version when you say so.
+
+A dev build (`tools/dev.sh`) never installs anything, and a dev server never
+installs a release over itself (it only says one is out).
 
 ## Packaging
 

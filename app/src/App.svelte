@@ -9,6 +9,8 @@
   import Chat from './lib/Chat.svelte'
   import Members from './lib/Members.svelte'
   import RoomDialog from './lib/RoomDialog.svelte'
+  import ServerPanel from './lib/ServerPanel.svelte'
+  import { httpBase } from './lib/conn.svelte.js'
   import logo from '../build/icon.svg'
 
   let servers = $state([]) // saved: {address, token, name, role}
@@ -18,7 +20,8 @@
   let addInitial = $state({})
   let info = $state({ canHost: false, version: '' })
 
-  let conn = $derived(selected ? conns[selected] : null)
+  const HOST = '#host' // the Host view (this PC's server) in place of a server
+  let conn = $derived(selected && selected !== HOST ? conns[selected] : null)
   let roomSel = $state({}) // server address -> the room shown
   let view = $state('chat') // chat or tests
   let roomDialog = $state(null) // {room} while adding or changing a room
@@ -62,6 +65,7 @@
     console.info(`auto test: Eris ${info.version}`, JSON.stringify(a))
     if (a.update) {
       // Accept an update as soon as one is offered (testing updates).
+      window.eris.checkUpdate()
       const t = setInterval(() => {
         if (update.state === 'available') update.download()
         if (update.state === 'ready') {
@@ -121,6 +125,49 @@
     }
   }
 
+
+  // This PC's server, through the main process (main/host.js).
+  const localApi = {
+    status: () => window.eris.hostStatus(),
+    log: () => window.eris.hostLog(),
+    action: (what) => window.eris.hostAction(what),
+    start: () => window.eris.hostStart(),
+  }
+
+  // A server the member owns, wherever it runs (with their member token).
+  function remoteApi(c) {
+    const call = (method, path) => window.eris.api({ method, url: httpBase(c.entry.address) + path, token: c.entry.token })
+    return {
+      status: async () => {
+        const r = await call('GET', '/api/admin/status')
+        if (r.status === 200) return { running: true, ...r.json }
+        // A server from before owner controls (0.1.4 and older) answers 404.
+        return r.status === 404 ? { running: true, legacy: true, version: c.serverVersion, name: c.serverName } : { running: false }
+      },
+      log: async () => {
+        const r = await call('GET', '/api/admin/log')
+        return r.status === 200 ? r.json : []
+      },
+      action: async (what) => {
+        const r = await call('POST', `/api/admin/${what}`)
+        return r.status === 200 ? { ok: true } : { ok: false, error: r.json?.error || `the server answered ${r.status}` }
+      },
+    }
+  }
+
+  // The Host view offers to join this PC's server when it isn't listed yet.
+  let joinOwn = $derived.by(() => {
+    return (st) => {
+      const link = String(st.join_link || '').replace("this-pc's-address", '127.0.0.1')
+      const { address, pin } = parseLink(link)
+      if (servers.some((s) => s.address === address || (pin && s.pin === pin))) {
+        selected = servers.find((s) => s.address === address || (pin && s.pin === pin)).address
+        return
+      }
+      addInitial = { address: link, ownerCode: st.owner_code || '' }
+      adding = true
+    }
+  })
 </script>
 
 {#if update.state === 'available' || update.state === 'downloading' || update.state === 'ready'}
@@ -146,9 +193,15 @@
       </button>
     {/each}
     <button class="icon add" title="Add a server" onclick={() => ((addInitial = {}), (adding = true))}>+</button>
+    <span class="grow"></span>
+    <button class="icon host" class:sel={selected === HOST} title="Host a server on this PC" onclick={() => (selected = HOST)}>⌂</button>
   </nav>
 
-  {#if !conn}
+  {#if selected === HOST}
+    <main class="hostview">
+      <ServerPanel api={localApi} local title="Your server (on this PC)" appVersion={info.version} onjoin={joinOwn} />
+    </main>
+  {:else if !conn}
     <main class="empty">
       <img src={logo} alt="" width="96" height="96" />
       <h1>Eris</h1>
@@ -216,7 +269,11 @@
           onedit={(r) => (roomDialog = { room: r })}
           oncreate={() => (roomDialog = { room: null })}
         />
-        {#if view === 'tests'}
+        {#if view === 'server' && conn.you?.role === 'owner'}
+          {#key conn.entry.address}
+            <ServerPanel api={remoteApi(conn)} title={`Server: ${conn.serverName || conn.entry.address}`} appVersion={info.version} />
+          {/key}
+        {:else if view === 'tests'}
           <section class="tests">
             <h2>Stream tests</h2>
             <Results results={conn.results} />
@@ -247,6 +304,9 @@
   .icon { position: relative; width: 44px; height: 44px; border-radius: 14px; padding: 0; text-transform: uppercase; font-weight: 600; }
   .icon.sel { background: var(--highlight); }
   .icon.add { background: var(--surface-2); font-size: 20px; }
+  .icon.host { background: var(--surface-2); font-size: 20px; }
+  .grow { flex: 1; }
+  .hostview { flex: 1; display: flex; min-width: 0; }
   .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
   .icon .dot { position: absolute; right: -1px; bottom: -1px; border: 2px solid var(--bg); width: 12px; height: 12px; }
   .dot.online { background: var(--good); }

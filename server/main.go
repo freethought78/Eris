@@ -19,6 +19,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -56,24 +57,35 @@ func main() {
 		runUpdate()
 		return
 	}
+	log.SetOutput(io.MultiWriter(os.Stderr, recent))
 	dir := *data
 	if dir == "" {
 		exe, err := os.Executable()
 		if err != nil {
-			log.Fatal(err)
+			fatal("%v", err)
 		}
 		dir = filepath.Join(filepath.Dir(exe), "eris-data")
 	}
 	store, first, err := Open(dir)
 	if err != nil {
-		log.Fatalf("data folder %s: %v", dir, err)
+		fatal("data folder %s: %v", dir, err)
 	}
 	hub := newHub(store)
+	ctl := &control{started: time.Now(), dataDir: dir, stop: make(chan string, 1), restart: make(chan string, 1),
+		ask: make(chan struct{}, 1), checking: !*noCheck}
 	mux := routes(store, hub)
+	adminRoutes(mux, store, hub, ctl)
 
 	cert, fingerprint, err := loadCert(dir)
 	if err != nil {
-		log.Fatalf("certificate: %v", err)
+		fatal("certificate: %v", err)
+	}
+	ln, err := net.Listen("tcp", *addr)
+	if err != nil {
+		fatal("%v (is the server already running?)", err)
+	}
+	if err := ctl.writeControlToken(); err != nil {
+		fatal("control token: %v", err)
 	}
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second,
 		TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}}
@@ -87,11 +99,17 @@ func main() {
 	_, port, _ := strings.Cut(*addr, ":")
 	// The link carries the certificate's fingerprint: give members the whole
 	// link, so their app knows it's really this server.
-	fmt.Printf("\n  Join link: eris://%s:%s#%s\n", host, port, fingerprint)
+	ctl.joinLink = fmt.Sprintf("eris://%s:%s#%s", host, port, fingerprint)
+	say("\n  Join link: %s\n", ctl.joinLink)
 	if first || st.OwnerCode != "" {
-		fmt.Printf("  Owner code (first join only): %s\n", st.OwnerCode)
+		say("  Owner code (first join only): %s\n", st.OwnerCode)
+	}
+	if isTerminal(os.Stdout) {
+		say("  Close this window to stop the server. Type update to check for a newer one.\n")
+		go showStatus(hub, ctl, os.Stdout)
 	}
 	fmt.Println()
+
 	// Updates: a newer release is installed in place of this program, and
 	// the server restarts into it when nobody is streaming.
 	program, _ = thisProgram()
@@ -106,13 +124,14 @@ func main() {
 			install = false
 		}
 	}
-	// "update" (typed in the server's window, or the dashboard's Check for
+	// "update" (typed in the server's window, or the app's Check for
 	// updates) checks now, and installs and restarts straight away.
 	updated := make(chan found, 1)
-	askUpdate := make(chan struct{}, 1)
-	if !*noCheck {
+	if *noCheck {
+		setUpdate(func(u *updateInfo) { u.State = "off" })
+	} else {
 		periodic := !strings.HasSuffix(version, "-dev") || os.Getenv("ERIS_RELEASES_API") != ""
-		go autoUpdate(context.Background(), *every, periodic, install, askUpdate, updated)
+		go autoUpdate(context.Background(), *every, periodic, install, ctl.ask, updated)
 	}
 	quietRestart := make(chan string, 1)
 	go func() {
@@ -123,21 +142,20 @@ func main() {
 		quietRestart <- f.version
 	}()
 
-	// Stopping: Ctrl+C, a kill, or (-exit-with-stdin) the dashboard closing
-	// our stdin. Members' apps see the connection drop and reconnect later.
-	stop := make(chan string, 1)
+	// Stopping: closing the window (SIGHUP), Ctrl+C, a kill, the app, or
+	// (-exit-with-stdin) whatever runs it closing our stdin. Members' apps
+	// see the connection drop and reconnect when it's back.
 	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
-	go func() { stop <- "stopped (" + (<-sigs).String() + ")" }()
-	// Commands on stdin, from the dashboard or typed in a terminal: stop,
-	// update. Stdin closing stops the server only with -exit-with-stdin.
-	if st, err := os.Stdin.Stat(); *owned || (err == nil && st.Mode()&os.ModeCharDevice != 0) {
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	go func() { ctl.stop <- "stopped (" + (<-sigs).String() + ")" }()
+	// Commands typed in the window (or sent by whatever runs it): stop, update.
+	if *owned || isTerminal(os.Stdin) {
 		go func() {
 			sc := bufio.NewScanner(os.Stdin)
 			for sc.Scan() {
 				switch strings.TrimSpace(sc.Text()) {
 				case "stop":
-					stop <- "stopped (asked to)"
+					ctl.stop <- "stopped (asked to)"
 					return
 				case "update":
 					if *noCheck {
@@ -145,21 +163,17 @@ func main() {
 						continue
 					}
 					select {
-					case askUpdate <- struct{}{}:
+					case ctl.ask <- struct{}{}:
 					default:
 					}
 				}
 			}
 			if *owned {
-				stop <- "stopped: the dashboard is gone"
+				ctl.stop <- "stopped: what ran it is gone"
 			}
 		}()
 	}
 	served := make(chan error, 1)
-	ln, err := net.Listen("tcp", *addr)
-	if err != nil {
-		log.Fatal(err)
-	}
 	tlsLn, plainLn := splitListen(ln)
 	go func() { served <- srv.Serve(tls.NewListener(tlsLn, srv.TLSConfig)) }()
 	go func() { _ = plain.Serve(plainLn) }()
@@ -171,20 +185,39 @@ func main() {
 		ln.Close()
 		cancel()
 		store.Close()
+		ctl.removeControlToken()
 	}
 	select {
 	case err := <-served:
-		log.Fatal(err)
-	case why := <-stop:
+		ctl.removeControlToken()
+		fatal("%v", err)
+	case why := <-ctl.stop:
 		shutdown()
 		log.Print(why)
+	case why := <-ctl.restart:
+		log.Print(why)
+		shutdown()
+		if err := restartSelf(false); err != nil {
+			fatal("couldn't restart: %v", err)
+		}
 	case v := <-quietRestart:
 		log.Printf("update: restarting into eris-server %s (members' apps reconnect by themselves)", v)
 		shutdown()
-		if err := restartSelf(); err != nil {
-			log.Fatalf("update: couldn't start the new server: %v", err)
+		if err := restartSelf(true); err != nil {
+			fatal("update: couldn't start the new server: %v", err)
 		}
 	}
+}
+
+// fatal stops the server with an error. In its own window, the window stays
+// open until Enter, so the error can be read.
+func fatal(format string, args ...any) {
+	log.Printf(format, args...)
+	if isTerminal(os.Stdin) && isTerminal(os.Stdout) {
+		fmt.Print("\nThe server stopped because of the error above. Press Enter to close this window. ")
+		bufio.NewReader(os.Stdin).ReadString('\n')
+	}
+	os.Exit(1)
 }
 
 // routes is the HTTP API (DESIGN.md 3.4).

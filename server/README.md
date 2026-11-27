@@ -52,7 +52,8 @@ Connected apps reconnect by themselves, and suggest updating the app if the
 server is now newer. If a restart ever comes back on a version that isn't
 newer, it stops installing by itself until the next start, so it can't loop.
 **To update straight away** after publishing a release: press **Check for
-updates** in the dashboard, or type `update` in the server's terminal window.
+updates** in the app (Host, or Server for owners), or type `update` in the
+server's terminal window.
 It checks now and, if there's a newer server, installs it and restarts at
 once, even if someone is streaming (their stream reconnects).
 `-no-auto-update` only says when a newer server is out (asking still
@@ -63,10 +64,20 @@ doesn't check at all; `eris-server -update` updates by hand and exits;
 `ERIS_RELEASES_API` points it at another release page (also turns checking
 on in a dev build).
 
-**Stopping:** Ctrl+C or a kill (SIGTERM) stops it cleanly: members' apps
-are told the server is stopping and reconnect when it's back. With
-`-exit-with-stdin` it also stops when its stdin reads `stop` or closes; the
-app's server dashboard (`Eris --server`, see app/README.md) runs it that way,
-so the server never outlives the dashboard.
+**Its window:** run in a terminal (the app starts it in one: see "Hosting a
+server" in app/README.md), it shows the join link, a status line that changes
+with who's online, who's streaming and updates, the window's title (online
+count), and the log. Typing `update` checks for a newer server; `stop` stops
+it. An error at start-up keeps the window open until Enter, so it can be read.
+
+**Stopping:** closing its window (SIGHUP), Ctrl+C or a kill (SIGTERM) stops it
+cleanly: members' apps are told the server is stopping and reconnect when it's
+back. With `-exit-with-stdin` it also stops when its stdin closes (`tools/dev.sh`
+runs it that way).
+
+**Owner controls** (`control.go`): `GET /api/admin/status` and `/api/admin/log`,
+`POST /api/admin/stop`, `/restart` and `/update`, for the owner (member token)
+or the app on the same PC (the control token the server writes to
+`control-token` in its data folder at each start, readable only by its user).
 
 Tests: `go test ./...`

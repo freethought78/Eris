@@ -1,21 +1,23 @@
 // Eris app, main process: the window, the saved server list, HTTP calls to
 // servers, and the streaming helper (DESIGN.md section 4; the helper is
 // helper/, started here and talked to with JSON lines on stdin and stdout).
-const { app, BrowserWindow, ipcMain, screen, session, net, shell } = require('electron')
+const { app, BrowserWindow, ipcMain, screen, session, net, shell, dialog } = require('electron')
 const crypto = require('node:crypto')
 const path = require('node:path')
 const fs = require('node:fs')
 const readline = require('node:readline')
 const { spawn, execFileSync } = require('node:child_process')
 const updater = require('./updater')
-const dashboard = require('./dashboard')
+const host = require('./host')
+const linuxInstall = require('./linux-install')
 
-// `Eris --server` is the server dashboard (dashboard.js), not the app.
-const dashboardMode = process.argv.includes('--server')
+// `Eris --server` only starts this PC's server in its own window (host.js)
+// and exits: for a desktop shortcut that starts the server without the app.
+const serverMode = process.argv.includes('--server')
 
 // ERIS_PROFILE=name keeps a separate server list and logs, so two copies can
 // run on one PC (for testing).
-if (process.env.ERIS_PROFILE && !dashboardMode) {
+if (process.env.ERIS_PROFILE) {
   app.setPath('userData', path.join(app.getPath('appData'), 'Eris-' + process.env.ERIS_PROFILE))
 }
 
@@ -319,12 +321,29 @@ ipcMain.handle('info', () => ({
   auto: autoConfig(),
 }))
 
-if (dashboardMode) {
-  dashboard.start()
+// Hosting a server on this PC.
+ipcMain.handle('host-status', async () => ({
+  ...(await host.status()),
+  canAddIcon: linuxInstall.canInstall(),
+  serverIcon: linuxInstall.hasServerIcon(),
+}))
+ipcMain.handle('host-add-icon', () => linuxInstall.addServerIcon())
+ipcMain.handle('host-start', () => host.start())
+ipcMain.handle('host-action', (_e, what) => (['stop', 'restart', 'update'].includes(what) ? host.action(what) : null))
+ipcMain.handle('host-log', () => host.log())
+
+if (serverMode) {
+  app.whenReady().then(async () => {
+    linuxInstall.integrate()
+    const r = await host.start()
+    if (!r.ok) dialog.showErrorBox('Eris server', r.error)
+    app.quit()
+  })
 } else {
   app.whenReady().then(() => {
     loadPins()
     session.defaultSession.setCertificateVerifyProc(verifyCertificate)
+    linuxInstall.integrate() // app menu and desktop icon, like an installer (AppImage only)
     createWindow()
     updater.setup((s) => send('update', s))
   })

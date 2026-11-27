@@ -37,6 +37,19 @@ if [ "${1:-}" = --fresh ] || [ ! -d "$DEV/data" ]; then
   fi
 fi
 
+# The dev server's name says it's the dev one (its data is a copy of the
+# real server's, so it would otherwise look the same).
+if [ -f "$DEV/data/settings.json" ]; then
+  python3 -I - "$DEV/data/settings.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+s = json.load(open(p))
+if not s.get("name", "").endswith(" (dev)"):
+    s["name"] = (s.get("name") or "Eris server") + " (dev)"
+    json.dump(s, open(p, "w"), indent=2)
+PY
+fi
+
 # The dev app starts with the dev server in its list, as the same member as
 # the real app's own server (whose data the dev server has a copy of).
 if [ ! -f "$APPDEV/servers.json" ] && [ -f "$HOME/.config/Eris/servers.json" ]; then
@@ -60,6 +73,8 @@ failed() {
   [ -t 0 ] && read -r -p "Press Enter to close. "
   exit 1
 }
+# The dev app's Host view looks after the dev server (app/main/host.js).
+printf '{\n  "data": "%s",\n  "addr": "127.0.0.1:%s",\n  "public": ""\n}\n' "$DEV/data" "$PORT" >"$DEV/host.json"
 echo "== building the dev build"
 (cd "$R/server" && go build -o bin/eris-server .) || failed
 (cd "$R/helper" && go build -o bin/ ./cmd/...) || failed

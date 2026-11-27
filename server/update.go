@@ -32,6 +32,12 @@ import (
 
 const releasesAPI = "https://api.github.com/repos/freethought78/Eris/releases/latest"
 
+// devBuild: built from the source folder (not a release). It never installs
+// a release over itself, unless pointed at a test release page.
+func devBuild() bool {
+	return strings.HasSuffix(version, "-dev") && os.Getenv("ERIS_RELEASES_API") == ""
+}
+
 // releasesURL is where updates are looked for; ERIS_RELEASES_API points it
 // elsewhere, for testing.
 func releasesURL() string {
@@ -82,17 +88,29 @@ func autoUpdate(ctx context.Context, every time.Duration, periodic, install bool
 		if asked {
 			log.Printf("update: checking for a newer eris-server now (this is %s)", version)
 		}
+		setUpdate(func(u *updateInfo) { u.State, u.Error = "checking", "" })
 		cctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 		r, err := latest(cctx, releasesURL())
+		now := time.Now().UnixMilli()
 		switch {
 		case err != nil:
+			setUpdate(func(u *updateInfo) { u.State, u.Error, u.Checked = "error", err.Error(), now })
 			if asked {
 				log.Printf("update: couldn't check: %v", err)
 			}
 		case !newer(r.version(), version):
+			setUpdate(func(u *updateInfo) { u.State, u.Latest, u.Checked = "latest", r.version(), now })
 			if asked {
 				log.Printf("update: eris-server %s is the latest", version)
 			}
+		case devBuild():
+			// A dev build is the code being worked on: it says a release is
+			// out, but never replaces itself with it.
+			setUpdate(func(u *updateInfo) { u.State, u.Latest, u.Checked = "available", r.version(), now })
+			if asked || told != r.version() {
+				log.Printf("update: eris-server %s is out; this is a dev build, which doesn't install releases", r.version())
+			}
+			told = r.version()
 		case install || asked:
 			var perr error
 			if program == "" {
@@ -101,6 +119,7 @@ func autoUpdate(ctx context.Context, every time.Duration, periodic, install bool
 				var v string
 				if v, perr = selfUpdate(cctx, releasesURL(), program); perr == nil && v != "" {
 					cancel()
+					setUpdate(func(u *updateInfo) { u.State, u.Latest, u.Checked = "downloaded", v, now })
 					if asked {
 						log.Printf("update: downloaded eris-server %s; restarting into it now", v)
 					} else {
@@ -110,11 +129,16 @@ func autoUpdate(ctx context.Context, every time.Duration, periodic, install bool
 					return
 				}
 			}
+			if perr == nil {
+				perr = errors.New("nothing was installed")
+			}
+			setUpdate(func(u *updateInfo) { u.State, u.Latest, u.Checked, u.Error = "error", r.version(), now, perr.Error() })
 			if asked || told != r.version() {
 				log.Printf("update: eris-server %s is out, but couldn't be installed: %v", r.version(), perr)
 			}
 			told = r.version()
 		default:
+			setUpdate(func(u *updateInfo) { u.State, u.Latest, u.Checked = "available", r.version(), now })
 			if told != r.version() {
 				log.Printf("update: eris-server %s is available (this is %s); type update here, use the dashboard's Check for updates, or run eris-server -update", r.version(), version)
 			}

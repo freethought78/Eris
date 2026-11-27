@@ -8,10 +8,11 @@ for streaming and controllers, and a Go dedicated server (with LiveKit, later).
 - `helper/`: the streaming helper, grown from the Phase 0 prototype (`ptsend` host,
   `ptrecv` player, `ptclock` and test scripts). Its README has all the measurements.
 - `server/`: eris-server (Go): joining, presence, stream signalling, stream test results.
-- `app/`: the Electron app (Svelte): servers, members, Go Live, Join, stream tests.
-  `tools/dev.sh` runs this folder's code as a dev app with a dev server next to
-  the installed Eris (see app/README.md). `Eris --server` is the server dashboard (it runs eris-server and stops it when
-  closed). `app/test-e2e.sh` runs all three end to end on one PC.
+- `app/`: the Electron app (Svelte): servers, rooms with chat and files, members, Go
+  Live, Join, stream tests, and Host (starts and controls this PC's server, which runs in
+  its own terminal window: app/main/host.js, server/control.go). `tools/dev.sh` runs
+  this folder's code as a dev app with a dev server next to the installed Eris (see
+  app/README.md). `app/test-e2e.sh` runs all three end to end on one PC.
 
 The old browser prototype (Node `server/`, `client/`, `build.js`) has been removed; it's in
 git history. Its UI palette lives on in `app/src/app.css`.
