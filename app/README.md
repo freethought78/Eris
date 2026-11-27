@@ -40,15 +40,19 @@ the host replaces a member's old session when they connect again.
 `Eris --server` (or `npx electron . --server` from the source folder) runs
 this PC's eris-server in a small window: running or not, the join link, the
 owner code until it's used, the version, the data folder and the server's
-log, with **Restart** and **Stop server**. The server lives exactly as long
+log, with **Check for updates** (installs a newer server straight away),
+**Restart** and **Stop server**. The server lives exactly as long
 as the window: closing the window stops it (cleanly: members' apps are told
 and reconnect when it's back), and the server runs with `-exit-with-stdin`,
 so if the dashboard dies any other way its stdin closes and it stops too.
 Only one dashboard runs at a time; starting another shows the first.
 
-The Linux AppImage carries the server (`resources/server/eris-server`), so
-updating the app updates the server: close and reopen the dashboard to run
-the new one. From the source folder it runs `../server/bin/eris-server`.
+The server updates itself (see server/README.md), so the dashboard runs a
+copy it can replace, `~/.config/Eris-server/bin/eris-server`. The Linux
+AppImage carries a server too (`resources/server/eris-server`) and puts it
+there when it's newer than the copy. The dashboard shows a downloaded update
+that's waiting for nobody to be streaming. From the source folder it runs
+`../server/bin/eris-server`.
 Settings are in `~/.config/Eris-server/dashboard.json`: `data` (default
 `~/.config/Eris-server/server-data`), `addr` (`:7300`) and `public` (the
 name in the join link); its log is `logs/server.log` there.

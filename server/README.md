@@ -26,13 +26,26 @@ What it does now:
   and `GET /api/tests`. Each result is also written to `eris-data/tests/` as a
   JSON file, so it can be read without the app.
 
-**Updating:** at start-up (then daily) it checks Eris's GitHub releases and
-says when a newer server is out. `eris-server -update` downloads it, checks it
-against the release's SHA256SUMS, and replaces the program (the old one is
-kept as `eris-server.old`); restart it, and connected apps reconnect by
-themselves (and suggest updating the app if the server is now newer).
-Release builds carry their version (`-ldflags "-X main.version=0.1.1"`; see
-`tools/release.sh`).
+**Updating:** release builds update themselves. Every hour (`-update-every`)
+the server checks Eris's GitHub releases; when there's a newer one it
+downloads it, checks it against the release's SHA256SUMS, puts it in place of
+the program (keeping the old one as `eris-server.old`), and restarts into it
+as soon as nobody is streaming. On Linux the restart keeps the same process,
+window and flags; on Windows it starts the new program in the same console.
+Connected apps reconnect by themselves, and suggest updating the app if the
+server is now newer. If a restart ever comes back on a version that isn't
+newer, it stops installing by itself until the next start, so it can't loop.
+**To update straight away** after publishing a release: press **Check for
+updates** in the dashboard, or type `update` in the server's terminal window.
+It checks now and, if there's a newer server, installs it and restarts at
+once, even if someone is streaming (their stream reconnects).
+`-no-auto-update` only says when a newer server is out (asking still
+installs); `-no-update-check`
+doesn't check at all; `eris-server -update` updates by hand and exits;
+`-version` prints the version. Release builds carry their version
+(`-ldflags "-X main.version=0.1.1"`; see `tools/release.sh`). For testing,
+`ERIS_RELEASES_API` points it at another release page (also turns checking
+on in a dev build).
 
 **Stopping:** Ctrl+C or a kill (SIGTERM) stops it cleanly: members' apps
 are told the server is stopping and reconnect when it's back. With

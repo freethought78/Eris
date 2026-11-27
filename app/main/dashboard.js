@@ -4,13 +4,18 @@
 // runs with -exit-with-stdin, so if this app dies any other way (a crash, a
 // kill, logging out) the server's stdin closes and it stops too.
 //
+// The server updates itself (it checks Eris's releases every hour and
+// restarts into a new one when nobody is streaming), so it runs from a copy
+// it can replace: bin/ in the dashboard's data folder. The app carries a
+// server too, and puts it there when it's newer than the copy.
+//
 // Its settings are in dashboard.json in its own data folder (~/.config/
 // Eris-server on Linux): {"data": folder, "addr": ":7300", "public": name}.
 const { app, BrowserWindow, ipcMain } = require('electron')
 const path = require('node:path')
 const fs = require('node:fs')
 const readline = require('node:readline')
-const { spawn } = require('node:child_process')
+const { spawn, execFileSync } = require('node:child_process')
 
 let win = null
 let server = null // the child process, while it runs
@@ -26,6 +31,47 @@ function serverExe() {
   const exe = process.platform === 'win32' ? 'eris-server.exe' : 'eris-server'
   if (app.isPackaged) return path.join(process.resourcesPath, 'server', exe)
   return path.join(__dirname, '..', '..', 'server', 'bin', exe)
+}
+
+// newer: is version a newer than b? The same rule as src/lib/version.js and
+// the server's.
+function newer(a, b) {
+  const split = (v) => {
+    const [main, suffix = ''] = String(v || '0').replace(/^v/, '').split('-', 2)
+    const p = main.split('.').map((x) => parseInt(x, 10) || 0)
+    return [[p[0] || 0, p[1] || 0, p[2] || 0], suffix]
+  }
+  const [pa, sa] = split(a)
+  const [pb, sb] = split(b)
+  for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return pa[i] > pb[i]
+  return sa === '' && sb !== ''
+}
+
+function versionOf(exe) {
+  try {
+    return execFileSync(exe, ['-version'], { encoding: 'utf8', timeout: 5000 }).trim()
+  } catch {
+    return '' // missing, or older than -version
+  }
+}
+
+// serverToRun is the server the dashboard starts: from the source folder,
+// its build; otherwise the updatable copy in bin/, refreshed from the app's
+// own when the app's is newer.
+function serverToRun() {
+  const carried = serverExe()
+  if (!app.isPackaged) return carried
+  const exe = file(path.join('bin', path.basename(carried)))
+  const have = versionOf(exe)
+  const offered = versionOf(carried)
+  if (offered && (!have || newer(offered, have))) {
+    fs.mkdirSync(path.dirname(exe), { recursive: true })
+    fs.copyFileSync(carried, exe + '.new')
+    fs.chmodSync(exe + '.new', 0o755)
+    fs.renameSync(exe + '.new', exe)
+    line(`--- installed eris-server ${offered} from the app${have ? ` (was ${have})` : ''}`)
+  }
+  return exe
 }
 
 function settings() {
@@ -50,7 +96,11 @@ function line(text) {
   if (win && !win.isDestroyed()) win.webContents.send('line', text)
   // What the server prints that the dashboard shows on its own.
   const v = text.match(/eris-server (\S+): "(.*)", data in (.*), listening on (\S+)/)
-  if (v) update({ state: 'running', version: v[1], name: v[2], data: v[3], addr: v[4] })
+  if (v) update({ state: 'running', version: v[1], name: v[2], data: v[3], addr: v[4], pending: '' })
+  const u = text.match(/update: downloaded eris-server (\S+)/)
+  if (u) update({ pending: u[1], checking: false, checked: '' })
+  if (/update: eris-server \S+ is the latest/.test(text)) update({ checking: false, checked: `up to date, checked ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` })
+  if (/update: (couldn't check|checking is off|eris-server \S+ is out, but)/.test(text)) update({ checking: false, checked: '' })
   const j = text.match(/Join link: (\S+)/)
   if (j) update({ link: j[1] })
   const o = text.match(/Owner code \(first join only\): (\S+)/)
@@ -59,14 +109,19 @@ function line(text) {
 
 function startServer() {
   const s = settings()
-  const exe = serverExe()
+  let exe
+  try {
+    exe = serverToRun()
+  } catch (err) {
+    update({ state: 'failed', error: `Couldn't set up the server program: ${err.message}` })
+    return
+  }
   if (!fs.existsSync(exe)) {
     update({ state: 'failed', error: `The server program is missing (${exe}).` })
     return
   }
   const args = ['-exit-with-stdin', '-data', s.data, '-addr', s.addr]
   if (s.public) args.push('-public', s.public)
-  if (app.isPackaged) args.push('-no-update-check') // it updates with the app
   update({ state: 'starting', error: '', link: '', ownerCode: '', since: Date.now() })
   line(`--- ${new Date().toLocaleString()}: starting ${exe}`)
   const child = spawn(exe, args, { stdio: ['pipe', 'pipe', 'pipe'] })
@@ -150,6 +205,14 @@ function start() {
     if (!server) finishClosing()
   })
   ipcMain.handle('dash-start', () => !server && startServer())
+  // Check for updates now; a newer server goes in straight away.
+  ipcMain.handle('dash-update', () => {
+    if (!server) return
+    update({ checking: true, checked: '' })
+    try {
+      server.stdin.write('update\n')
+    } catch {}
+  })
   ipcMain.handle('dash-restart', () => {
     if (!server) return startServer()
     const child = server

@@ -58,6 +58,13 @@ func newHub(s *Store) *Hub {
 	return &Hub{store: s, clients: map[int64]map[*client]bool{}, live: map[int64]liveInfo{}, done: make(chan struct{})}
 }
 
+// liveCount is how many members are streaming.
+func (h *Hub) liveCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.live)
+}
+
 // closeAll tells every connected app the server is stopping (they reconnect
 // by themselves when it's back).
 func (h *Hub) closeAll() {

@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('dash', {
   stop: () => ipcRenderer.invoke('dash-stop'),
   start: () => ipcRenderer.invoke('dash-start'),
   restart: () => ipcRenderer.invoke('dash-restart'),
+  checkUpdate: () => ipcRenderer.invoke('dash-update'),
   onState: (fn) => ipcRenderer.on('state', (_e, s) => fn(s)),
   onLine: (fn) => ipcRenderer.on('line', (_e, l) => fn(l)),
 })

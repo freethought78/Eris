@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -23,8 +24,117 @@ import (
 // downloads the one for this machine, checks it against SHA256SUMS, and puts
 // it in place of the running program (which keeps running until restarted:
 // apps reconnect by themselves when it comes back).
+//
+// Release builds also do this by themselves (autoUpdate): they check every
+// hour, download and check a newer release, and restart into it as soon as
+// nobody is streaming. Members' apps reconnect, and suggest updating the app
+// if it's now older than the server.
 
 const releasesAPI = "https://api.github.com/repos/freethought78/Eris/releases/latest"
+
+// releasesURL is where updates are looked for; ERIS_RELEASES_API points it
+// elsewhere, for testing.
+func releasesURL() string {
+	if u := os.Getenv("ERIS_RELEASES_API"); u != "" {
+		return u
+	}
+	return releasesAPI
+}
+
+// program is this program's path, found at start-up: once an update has
+// renamed the running file to .old, asking again (/proc/self/exe on Linux)
+// would give the .old one.
+var program string
+
+// thisProgram is the running program's real path.
+func thisProgram() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(exe)
+}
+
+// found is a newer release put in place of this program; now means it was
+// asked for (restart straight away, not when nobody is streaming).
+type found struct {
+	version string
+	now     bool
+}
+
+// autoUpdate checks for a newer release every `every` (periodic false: only
+// when asked) and whenever something arrives on ask. With install, or when
+// asked, it puts it in place of this program and sends it on ready (once);
+// otherwise, or when the program can't be replaced (read-only, say), it only
+// says there's one.
+func autoUpdate(ctx context.Context, every time.Duration, periodic, install bool, ask <-chan struct{}, ready chan<- found) {
+	told := ""
+	asked := false
+	if !periodic {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ask:
+			asked = true
+		}
+	}
+	for {
+		if asked {
+			log.Printf("update: checking for a newer eris-server now (this is %s)", version)
+		}
+		cctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+		r, err := latest(cctx, releasesURL())
+		switch {
+		case err != nil:
+			if asked {
+				log.Printf("update: couldn't check: %v", err)
+			}
+		case !newer(r.version(), version):
+			if asked {
+				log.Printf("update: eris-server %s is the latest", version)
+			}
+		case install || asked:
+			var perr error
+			if program == "" {
+				perr = errors.New("this program's path isn't known")
+			} else {
+				var v string
+				if v, perr = selfUpdate(cctx, releasesURL(), program); perr == nil && v != "" {
+					cancel()
+					if asked {
+						log.Printf("update: downloaded eris-server %s; restarting into it now", v)
+					} else {
+						log.Printf("update: downloaded eris-server %s; restarting into it as soon as nobody is streaming", v)
+					}
+					ready <- found{v, asked}
+					return
+				}
+			}
+			if asked || told != r.version() {
+				log.Printf("update: eris-server %s is out, but couldn't be installed: %v", r.version(), perr)
+			}
+			told = r.version()
+		default:
+			if told != r.version() {
+				log.Printf("update: eris-server %s is available (this is %s); type update here, use the dashboard's Check for updates, or run eris-server -update", r.version(), version)
+			}
+			told = r.version()
+		}
+		cancel()
+		asked = false
+		var wait <-chan time.Time
+		if periodic {
+			wait = time.After(every)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-wait:
+		case <-ask:
+			asked = true
+		}
+	}
+}
 
 type release struct {
 	Tag    string `json:"tag_name"`
@@ -105,21 +215,6 @@ func splitVersion(v string) ([3]int, string) {
 }
 
 // checkForUpdate logs when a newer server is out (at start-up, then daily).
-func checkForUpdate(ctx context.Context) {
-	for {
-		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		r, err := latest(cctx, releasesAPI)
-		cancel()
-		if err == nil && newer(r.version(), version) {
-			fmt.Printf("\n  eris-server %s is available (this is %s): stop it, run `eris-server -update`, start it again.\n  Connected apps reconnect by themselves.\n\n", r.version(), version)
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(24 * time.Hour):
-		}
-	}
-}
 
 // selfUpdate replaces the program at exe with the latest release's, if newer.
 func selfUpdate(ctx context.Context, api, exe string) (string, error) {
@@ -200,17 +295,14 @@ func download(ctx context.Context, url, path, wantSHA string) error {
 
 // runUpdate is `eris-server -update`.
 func runUpdate() {
-	exe, err := os.Executable()
-	if err == nil {
-		exe, err = filepath.EvalSymlinks(exe)
-	}
+	exe, err := thisProgram()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	v, err := selfUpdate(ctx, releasesAPI, exe)
+	v, err := selfUpdate(ctx, releasesURL(), exe)
 	switch {
 	case err != nil:
 		fmt.Fprintln(os.Stderr, "update failed:", err)

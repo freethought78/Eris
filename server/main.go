@@ -37,12 +37,19 @@ var (
 	data    = flag.String("data", "", "data folder (default: eris-data next to the program)")
 	public  = flag.String("public", "", "this server's internet address or name, for the join link it prints")
 	update  = flag.Bool("update", false, "update this program to the latest release on GitHub, then exit")
-	noCheck = flag.Bool("no-update-check", false, "don't check GitHub for a newer server at start-up")
+	noCheck = flag.Bool("no-update-check", false, "don't check GitHub for newer servers at all")
+	noAuto  = flag.Bool("no-auto-update", false, "only say when a newer server is out; don't install it and restart by itself")
+	every   = flag.Duration("update-every", time.Hour, "how often to check for a newer server")
+	showVer = flag.Bool("version", false, "print the version and exit")
 	owned   = flag.Bool("exit-with-stdin", false, "stop when stdin closes or reads \"stop\" (run by the Eris server dashboard, so the server never outlives it)")
 )
 
 func main() {
 	flag.Parse()
+	if *showVer {
+		fmt.Println(version)
+		return
+	}
 	if *update {
 		runUpdate()
 		return
@@ -73,9 +80,36 @@ func main() {
 		_, port, _ := strings.Cut(*addr, ":")
 		fmt.Printf("\n  Join link: eris://%s:%s\n  Owner code (first join only): %s\n\n", host, port, st.OwnerCode)
 	}
-	if !*noCheck && !strings.HasSuffix(version, "-dev") {
-		go checkForUpdate(context.Background())
+	// Updates: a newer release is installed in place of this program, and
+	// the server restarts into it when nobody is streaming.
+	program, _ = thisProgram()
+	install := !*noAuto
+	if from := os.Getenv("ERIS_UPDATED_FROM"); from != "" {
+		os.Unsetenv("ERIS_UPDATED_FROM")
+		if newer(version, from) {
+			log.Printf("update: now running eris-server %s (was %s)", version, from)
+		} else {
+			// Never loop: an update that didn't take isn't tried again by itself.
+			log.Printf("update: restarted to update from %s but this is still %s; not installing updates by itself until the next start", from, version)
+			install = false
+		}
 	}
+	// "update" (typed in the server's window, or the dashboard's Check for
+	// updates) checks now, and installs and restarts straight away.
+	updated := make(chan found, 1)
+	askUpdate := make(chan struct{}, 1)
+	if !*noCheck {
+		periodic := !strings.HasSuffix(version, "-dev") || os.Getenv("ERIS_RELEASES_API") != ""
+		go autoUpdate(context.Background(), *every, periodic, install, askUpdate, updated)
+	}
+	quietRestart := make(chan string, 1)
+	go func() {
+		f := <-updated
+		for !f.now && hub.liveCount() > 0 {
+			time.Sleep(15 * time.Second)
+		}
+		quietRestart <- f.version
+	}()
 
 	// Stopping: Ctrl+C, a kill, or (-exit-with-stdin) the dashboard closing
 	// our stdin. Members' apps see the connection drop and reconnect later.
@@ -83,30 +117,53 @@ func main() {
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
 	go func() { stop <- "stopped (" + (<-sigs).String() + ")" }()
-	if *owned {
+	// Commands on stdin, from the dashboard or typed in a terminal: stop,
+	// update. Stdin closing stops the server only with -exit-with-stdin.
+	if st, err := os.Stdin.Stat(); *owned || (err == nil && st.Mode()&os.ModeCharDevice != 0) {
 		go func() {
 			sc := bufio.NewScanner(os.Stdin)
 			for sc.Scan() {
-				if strings.TrimSpace(sc.Text()) == "stop" {
+				switch strings.TrimSpace(sc.Text()) {
+				case "stop":
 					stop <- "stopped from the dashboard"
 					return
+				case "update":
+					if *noCheck {
+						log.Printf("update: checking is off (-no-update-check)")
+						continue
+					}
+					select {
+					case askUpdate <- struct{}{}:
+					default:
+					}
 				}
 			}
-			stop <- "stopped: the dashboard is gone"
+			if *owned {
+				stop <- "stopped: the dashboard is gone"
+			}
 		}()
 	}
 	served := make(chan error, 1)
 	go func() { served <- srv.ListenAndServe() }()
-	select {
-	case err := <-served:
-		log.Fatal(err)
-	case why := <-stop:
+	shutdown := func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		hub.closeAll()
 		_ = srv.Shutdown(ctx)
 		cancel()
 		store.Close()
+	}
+	select {
+	case err := <-served:
+		log.Fatal(err)
+	case why := <-stop:
+		shutdown()
 		log.Print(why)
+	case v := <-quietRestart:
+		log.Printf("update: restarting into eris-server %s (members' apps reconnect by themselves)", v)
+		shutdown()
+		if err := restartSelf(); err != nil {
+			log.Fatalf("update: couldn't start the new server: %v", err)
+		}
 	}
 }
 

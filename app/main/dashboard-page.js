@@ -9,13 +9,15 @@ function show(s) {
   if (s.name) $('name').textContent = s.name
   $('link').textContent = s.link || '-'
   $('owner').textContent = s.ownerCode || 'used (the owner has joined)'
-  $('version').textContent = s.version || '-'
+  $('version').textContent = (s.version || '-') +
+    (s.pending ? ` (${s.pending} is downloaded and goes in as soon as nobody is streaming)` : s.checking ? ' (checking...)' : s.checked ? ` (${s.checked})` : '')
   $('data').textContent = s.data || '-'
   $('error').hidden = !s.error
   $('error').textContent = s.error || ''
   const up = s.state === 'running' || s.state === 'starting'
   $('start').hidden = up || s.state === 'stopping'
   $('restart').disabled = !up
+  $('update').disabled = s.state !== 'running' || !!s.checking
   $('stop').textContent = up || s.state === 'stopping' ? 'Stop server' : 'Close'
   since = s.state === 'running' ? s.since : 0
   tick()
@@ -38,6 +40,7 @@ function addLine(l) {
 $('stop').onclick = () => window.dash.stop()
 $('start').onclick = () => window.dash.start()
 $('restart').onclick = () => window.dash.restart()
+$('update').onclick = () => window.dash.checkUpdate()
 window.dash.onState(show)
 window.dash.onLine(addLine)
 window.dash.state().then((s) => {
