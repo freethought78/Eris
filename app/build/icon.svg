@@ -18,11 +18,11 @@
   <circle cx="256" cy="256" r="232" fill="none" stroke="url(#rim)" stroke-width="14"/>
 
   <!-- The pentagon, in the light half's head. -->
-  <g transform="translate(256,142) scale(0.88)">
+  <g transform="translate(256,142) scale(1.1)">
     <polygon fill="#e94560" stroke="#16213e" stroke-width="6" stroke-linejoin="round"
       points="0,-80 76.1,-24.7 47,64.7 -47,64.7 -76.1,-24.7"/>
     <text x="0" y="2" fill="#ffffff" font-family="DejaVu Sans, Arial, sans-serif" font-weight="bold"
-      font-size="66" text-anchor="middle" dominant-baseline="central" letter-spacing="-2">23</text>
+      font-size="76" text-anchor="middle" dominant-baseline="central" letter-spacing="-2">23</text>
   </g>
 
   <!-- The golden apple, in the dark half's head. -->
