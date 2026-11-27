@@ -1,9 +1,8 @@
 node_modules/
-bundle/eris.zip
-client/eris.zip
-client/bundle.js
-.server-*.txt
-.test-*.txt
-prototype/stream/bin/
-prototype/stream/logs/
-prototype/stream/dist/
+helper/bin/
+helper/logs/
+helper/dist/
+app/dist/
+app/out/
+server/eris-data/
+server/bin/

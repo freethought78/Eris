@@ -1,0 +1,32 @@
+/* The old Eris prototype's palette. */
+:root {
+  --bg: #1a1a2e;
+  --surface: #16213e;
+  --surface-2: #1f2b4d;
+  --text: #e0e0e0;
+  --muted: #9aa3b8;
+  --accent: #0f3460;
+  --highlight: #e94560;
+  --good: #4ecca3;
+  --warn: #f0a500;
+  --border: #2a2a4a;
+  --radius: 6px;
+  --font: system-ui, -apple-system, sans-serif;
+}
+*, *::before, *::after { box-sizing: border-box; }
+html, body, #app { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--text); font-family: var(--font); font-size: 14px; }
+button {
+  font: inherit; color: var(--text); background: var(--accent); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 6px 12px; cursor: pointer;
+}
+button:hover:not(:disabled) { filter: brightness(1.25); }
+button:disabled { opacity: 0.5; cursor: default; }
+button.primary { background: var(--highlight); border-color: var(--highlight); }
+input {
+  font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 6px 8px; width: 100%;
+}
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 18px 0 8px; }
+.muted { color: var(--muted); }
+.error { color: var(--highlight); }

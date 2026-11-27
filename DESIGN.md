@@ -361,7 +361,9 @@ nobody wants to help. So before more remote tests:
    player and the Windows player in a Bottles bottle.
 2. **A minimal Eris app and server** (parts of Phase 1 and Phase 4 brought forward): the
    friend installs the app once, joins the server the normal way, and joins a stream from a
-   button.
+   button. *First build done (2026-11-26):* joining, presence, Go Live, Join, and stream
+   tests whose results both sides post to the server; `app/test-e2e.sh` runs it end to end
+   on one PC. Still to do: the Windows build and installer.
 3. **Built-in stream tests:** both apps take part, and both sides' measurements come back to
    the streamer automatically, shown in the app and saved on their PC.
 4. **Live updates** (no longer left out of v1): the app checks Eris's GitHub releases,
@@ -405,7 +407,8 @@ eris/
 └── DESIGN.md
 ```
 
-The old `client/`, `server/` (Node) and `build.js` are removed as each phase replaces them.
+The old `client/`, `server/` (Node) and `build.js` have been removed (2026-11-26). The Phase 0
+prototype became `helper/`.
 
 ---
 

@@ -2,13 +2,19 @@
 
 ## State of the repo
 
-Eris is being redesigned. `DESIGN.md` is the source of truth and describes the new
-architecture: an Electron app, a Go helper for streaming and controllers, and a Go
-dedicated server that bundles LiveKit.
+Eris is being redesigned. `DESIGN.md` is the source of truth: an Electron app, a Go helper
+for streaming and controllers, and a Go dedicated server (with LiveKit, later).
 
-The code currently in the tree (`client/`, the Node `server/`, `build.js`, the test scripts)
-is the **old prototype** (anonymous, browser-only, peer-to-peer). It is replaced phase by
-phase as described in DESIGN.md section 6, not extended. Its UI look and feel may be reused.
+- `helper/`: the streaming helper, grown from the Phase 0 prototype (`ptsend` host,
+  `ptrecv` player, `ptclock` and test scripts). Its README has all the measurements.
+- `server/`: eris-server (Go): joining, presence, stream signalling, stream test results.
+- `app/`: the Electron app (Svelte): servers, members, Go Live, Join, stream tests.
+  `app/test-e2e.sh` runs all three end to end on one PC.
+
+The old browser prototype (Node `server/`, `client/`, `build.js`) has been removed; it's in
+git history. Its UI palette lives on in `app/src/app.css`.
+
+Build order: DESIGN.md section 6, "Order, revised after the first test between two homes".
 
 ## Key points
 
