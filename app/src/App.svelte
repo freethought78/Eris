@@ -156,18 +156,24 @@
   }
 
   // The Host view offers to join this PC's server when it isn't listed yet.
-  let joinOwn = $derived.by(() => {
-    return (st) => {
-      const link = String(st.join_link || '').replace("this-pc's-address", '127.0.0.1')
-      const { address, pin } = parseLink(link)
-      if (servers.some((s) => s.address === address || (pin && s.pin === pin))) {
-        selected = servers.find((s) => s.address === address || (pin && s.pin === pin)).address
-        return
-      }
-      addInitial = { address: link, ownerCode: st.owner_code || '' }
-      adding = true
+  function ownLink(st) {
+    return String(st.join_link || '').replace("this-pc's-address", '127.0.0.1')
+  }
+
+  function ownListed(st) {
+    const { address, pin } = parseLink(ownLink(st))
+    return servers.find((s) => s.address === address || (pin && s.pin === pin)) || null
+  }
+
+  function joinOwn(st) {
+    const listed = ownListed(st)
+    if (listed) {
+      selected = listed.address
+      return
     }
-  })
+    addInitial = { address: ownLink(st), ownerCode: st.owner_code || '' }
+    adding = true
+  }
 </script>
 
 {#if update.state === 'available' || update.state === 'downloading' || update.state === 'ready'}
@@ -199,7 +205,7 @@
 
   {#if selected === HOST}
     <main class="hostview">
-      <ServerPanel api={localApi} local title="Your server (on this PC)" appVersion={info.version} onjoin={joinOwn} />
+      <ServerPanel api={localApi} local title="Your server (on this PC)" appVersion={info.version} onjoin={joinOwn} listed={(st) => !!ownListed(st)} />
     </main>
   {:else if !conn}
     <main class="empty">

@@ -128,6 +128,8 @@ function createWindow() {
     },
   })
   win.setMenuBarVisibility(false)
+  // The window keeps its own title (the page's would hide "(dev)").
+  win.on('page-title-updated', (e) => e.preventDefault())
   // Links in messages open in the browser; the window never goes anywhere else.
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//.test(url)) shell.openExternal(url)

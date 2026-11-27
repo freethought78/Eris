@@ -14,6 +14,9 @@
 # This terminal is the dev session: it shows the dev server's log, and
 # closing the dev app stops the dev server (closing this window stops both).
 set -euo pipefail
+# The whole script is read before any of it runs (the braces), so editing
+# this file while a dev session is open can't make the open one misbehave.
+{
 R=$(cd "$(dirname "$0")/.." && pwd)
 LIVE_DATA="$HOME/.config/Eris-server/server-data"
 DEV="$HOME/.config/Eris-server-dev"
@@ -98,3 +101,5 @@ echo "== dev app (window title: Eris (dev))"
 cd "$R/app"
 ERIS_PROFILE=dev ./node_modules/electron/dist/electron . 2>>"$APPDEV/electron.log" || true
 echo "== the dev app closed; stopping the dev server"
+exit
+}

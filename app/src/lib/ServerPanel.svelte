@@ -8,7 +8,7 @@
   import { onDestroy } from 'svelte'
   import { update } from './update.svelte.js'
 
-  let { api, local = false, title, onjoin = null, appVersion = '' } = $props()
+  let { api, local = false, title, onjoin = null, listed = () => true, appVersion = '' } = $props()
 
   let st = $state(null) // what the server reports, or {running: false}
   let lines = $state([])
@@ -155,7 +155,7 @@
       {/if}
       {#if local}<span class="muted">Data</span><b>{st.data}</b>{/if}
     </div>
-    {#if onjoin}
+    {#if onjoin && !listed(st)}
       <p class="note">This server isn't in your list yet. <button class="mini primary" onclick={() => onjoin(st)}>Join it</button></p>
     {/if}
     <h3>Log</h3>

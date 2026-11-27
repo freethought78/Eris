@@ -57,4 +57,10 @@ rm -rf ~/.config/Eris-e2e-host ~/.config/Eris-e2e-player
 echo "Logs: $T"
 chat=$(cat $T/logs-host/app.log $T/logs-player/app.log 2>/dev/null | grep -c "auto test: got")
 echo "== chat messages received with their files: $chat of 2"
-if [ "$n" -ge 2 ] && [ "$chat" -ge 2 ]; then echo "PASS"; else echo "FAIL: expected both sides' results and both chat messages"; exit 1; fi
+if [ "$n" -ge 2 ] && [ "$chat" -ge 2 ]; then
+  echo "PASS"
+  rm -rf "$T" # the logs are only kept when it fails
+else
+  echo "FAIL: expected both sides' results and both chat messages"
+  exit 1
+fi
