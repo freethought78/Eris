@@ -12,6 +12,7 @@ const path = require('node:path')
 const fs = require('node:fs')
 const os = require('node:os')
 const { execFileSync } = require('node:child_process')
+const crypto = require('node:crypto')
 
 function home(...p) {
   return path.join(os.homedir(), ...p)
@@ -84,21 +85,26 @@ function appImage() {
   return process.platform === 'linux' && app.isPackaged ? process.env.APPIMAGE || '' : ''
 }
 
+// iconPath puts the app's icon where the menu and desktop icons point. Its
+// file name carries a hash of the picture: GNOME remembers icons by file
+// name, so a new picture needs a new name to show up. Older ones are removed.
 function iconPath() {
-  const icon = home('.local', 'share', 'eris', 'eris.png')
+  const dir = home('.local', 'share', 'eris')
   try {
-    const src = path.join(__dirname, '..', 'build', 'icon.png')
-    const want = fs.readFileSync(src)
-    let have = null
-    try {
-      have = fs.readFileSync(icon)
-    } catch {}
-    if (!have || !have.equals(want)) {
-      fs.mkdirSync(path.dirname(icon), { recursive: true })
+    const want = fs.readFileSync(path.join(__dirname, '..', 'build', 'icon.png'))
+    const name = `eris-${crypto.createHash('sha256').update(want).digest('hex').slice(0, 10)}.png`
+    const icon = path.join(dir, name)
+    if (!fs.existsSync(icon)) {
+      fs.mkdirSync(dir, { recursive: true })
       fs.writeFileSync(icon, want)
     }
-  } catch {}
-  return icon
+    for (const f of fs.readdirSync(dir)) {
+      if (/^eris(-[0-9a-f]+)?\.png$/.test(f) && f !== name) fs.rmSync(path.join(dir, f), { force: true })
+    }
+    return icon
+  } catch {
+    return path.join(dir, 'eris.png')
+  }
 }
 
 // integrate runs at every start of the AppImage.
