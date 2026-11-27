@@ -35,7 +35,9 @@ for t in linux/amd64 windows/amd64; do
 done
 
 # The Linux AppImage carries the server too (its dashboard: Eris --server).
-mkdir -p "$R/server/bin" && cp "$OUT/eris-server-linux-amd64" "$R/server/bin/eris-server"
+# (copied in beside it and renamed over it: a dev server may be running from it)
+mkdir -p "$R/server/bin" && cp "$OUT/eris-server-linux-amd64" "$R/server/bin/eris-server.new" &&
+  mv -f "$R/server/bin/eris-server.new" "$R/server/bin/eris-server"
 echo "== helper"
 (cd "$R/helper" && go build -o bin/ ./cmd/... && ./build-windows.sh >/dev/null)
 
