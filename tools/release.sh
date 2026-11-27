@@ -34,6 +34,8 @@ for t in linux/amd64 windows/amd64; do
     -o "$OUT/eris-server-$os-$arch$ext" .)
 done
 
+# The Linux AppImage carries the server too (its dashboard: Eris --server).
+mkdir -p "$R/server/bin" && cp "$OUT/eris-server-linux-amd64" "$R/server/bin/eris-server"
 echo "== helper"
 (cd "$R/helper" && go build -o bin/ ./cmd/... && ./build-windows.sh >/dev/null)
 
@@ -51,7 +53,7 @@ if [ "$PUBLISH" = "--publish" ]; then
   git -C "$R" tag -a "v$V" -m "Eris $V"
   git -C "$R" push -q origin HEAD "v$V"
   gh release create "v$V" --repo freethought78/Eris --title "Eris $V" \
-    --notes "Windows: download Eris-Setup-$V.exe and run it. Linux: Eris-$V.AppImage. Servers: eris-server-<os>-amd64, or \`eris-server -update\`." \
+    --notes "Windows: download Eris-Setup-$V.exe and run it. Linux: Eris-$V.AppImage (\`--server\` opens the server dashboard). Servers on their own: eris-server-<os>-amd64, or \`eris-server -update\`." \
     "$OUT"/*
   echo "== published v$V"
 fi

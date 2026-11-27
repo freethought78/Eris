@@ -5,6 +5,7 @@
   import { update } from './lib/update.svelte.js'
   import AddServer from './lib/AddServer.svelte'
   import Results from './lib/Results.svelte'
+  import logo from '../build/icon.svg'
 
   let servers = $state([]) // saved: {address, token, name, role}
   let conns = $state({}) // address -> Conn
@@ -71,9 +72,15 @@
     const until = (f) => new Promise((res) => { const t = setInterval(() => { if (f()) { clearInterval(t); res() } }, 200) })
     await until(() => c.status === 'online')
     if (a.live) stream.goLive(c, { extraArgs: a.hostArgs })
+    if (a.watch) {
+      // Join a member's stream as soon as they're live (a plain join, no test).
+      await until(() => c.members.some((m) => m.name === a.watch && c.live[m.id]))
+      stream.join(c, c.members.find((m) => m.name === a.watch).id)
+    }
     if (a.testWith) {
       await until(() => c.members.some((m) => m.name === a.testWith && m.online))
       await until(() => stream.hosting && c.live[c.you.id])
+      if (a.testDelay) await new Promise((r) => setTimeout(r, a.testDelay * 1000))
       const m = c.members.find((m) => m.name === a.testWith)
       stream.testWith(c, m.id, a.seconds || 20)
     }
@@ -110,6 +117,7 @@
   <main>
     {#if !conn}
       <div class="empty">
+        <img src={logo} alt="" width="96" height="96" />
         <h1>Eris</h1>
         <p class="muted">Add a server to start: the address and your name. The server's host gives you the address.</p>
         <button class="primary" onclick={() => (adding = true)}>Add a server</button>

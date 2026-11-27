@@ -5,6 +5,10 @@
 //
 // A stream test is a join with a time limit and a test id: when it ends,
 // both helpers' summaries are posted to the server, which keeps them.
+//
+// Each helper run has its own number, on every message from it: a run that's
+// being replaced (a stream test starting while we already watch, say) still
+// reports to the test it belonged to, and its ending can't touch the new run.
 
 function newTestId() {
   const d = new Date()
@@ -12,15 +16,20 @@ function newTestId() {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
 }
 
+let runs = 0
+
 class Stream {
   hosting = $state(false) // our helper is streaming our screen
   hostConn = null // the server we're live on
-  playing = $state(null) // {conn, hostId, testId, seconds, state}
+  hostRun = 0 // our host helper's run
+  playing = $state(null) // {conn, hostId, testId, seconds, state, run}
+  #playerRuns = new Map() // run -> {conn, hostId, testId}, until it exits
+  #invited = new Map() // member id -> the test id we invited them to
   notice = $state('') // the latest thing worth saying
   lastSummary = $state(null) // {side, summary}
 
   constructor() {
-    window.eris.onHelper(({ role, msg }) => (role === 'host' ? this.#fromHost(msg) : this.#fromPlayer(msg)))
+    window.eris.onHelper(({ role, run, msg }) => (role === 'host' ? this.#fromHost(run, msg) : this.#fromPlayer(run, msg)))
   }
 
   // A connection's signals and invitations come here.
@@ -41,7 +50,8 @@ class Stream {
     this.notice = 'Starting the stream...'
     const host = conn.entry.address.replace(/^.*:\/\//, '').replace(/:\d+$/, '')
     const isLocal = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host)
-    await window.eris.startHelper('host', { publicAddr: isLocal ? '' : host, ...opts })
+    this.hostRun = ++runs
+    await window.eris.startHelper('host', { publicAddr: isLocal ? '' : host, ...opts, run: this.hostRun })
   }
 
   stopLive() {
@@ -54,15 +64,18 @@ class Stream {
 
   // Join hostId's stream; with testId and seconds it's a stream test.
   async join(conn, hostId, { testId = '', seconds = 0, extraArgs } = {}) {
-    if (this.playing) window.eris.stopHelper('player')
-    this.playing = { conn, hostId, testId, seconds, state: 'starting' }
+    if (this.playing) window.eris.stopHelper('player') // it still reports to its own test
+    const run = ++runs
+    this.#playerRuns.set(run, { conn, hostId, testId })
+    this.playing = { conn, hostId, testId, seconds, state: 'starting', run }
     this.notice = testId ? `Stream test ${testId} starting...` : 'Joining the stream...'
-    await window.eris.startHelper('player', { seconds, width: 1280, height: 720, extraArgs })
+    await window.eris.startHelper('player', { seconds, width: 1280, height: 720, extraArgs, run })
   }
 
   // Start a stream test with a player: they join with a time limit.
   testWith(conn, memberId, seconds = 60) {
     const testId = newTestId()
+    this.#invited.set(memberId, testId)
     conn.invite(memberId, testId, seconds)
     this.notice = `Stream test ${testId} started with ${conn.member(memberId)?.name || 'them'}.`
     return testId
@@ -80,7 +93,12 @@ class Stream {
           conn.signal(from, { kind: 'refused', error: "isn't streaming right now" })
           return
         }
-        window.eris.sendHelper('host', { type: 'offer', peer: from, sdp: data.sdp, test_id: data.test_id || '' })
+        {
+          // An older player app may not pass the test id on; we know whom we invited.
+          const testId = data.test_id || this.#invited.get(from) || ''
+          this.#invited.delete(from)
+          window.eris.sendHelper('host', { type: 'offer', peer: from, sdp: data.sdp, test_id: testId })
+        }
         break
       case 'answer': // the host's helper answered ours
         if (this.playing && this.playing.hostId === from) {
@@ -97,8 +115,14 @@ class Stream {
     }
   }
 
-  #fromHost(msg) {
+  #fromHost(run, msg) {
     const conn = this.hostConn
+    if (msg.type === 'summary') {
+      this.lastSummary = { side: 'host', summary: msg.summary }
+      if (msg.test_id && conn) this.#post(conn, msg.test_id, 'host', msg.summary)
+      return
+    }
+    if (run !== this.hostRun) return // an earlier run, already replaced
     switch (msg.type) {
       case 'ready':
         conn?.setLive(true, `${msg.width}x${msg.height} at ${msg.fps} fps`)
@@ -109,10 +133,6 @@ class Stream {
         break
       case 'refused':
         conn?.signal(msg.peer, { kind: 'refused', error: msg.error })
-        break
-      case 'summary':
-        this.lastSummary = { side: 'host', summary: msg.summary }
-        if (msg.test_id && conn) conn.postResult(msg.test_id, 'host', msg.summary)
         break
       case 'error':
         this.notice = msg.error
@@ -128,28 +148,45 @@ class Stream {
     }
   }
 
-  #fromPlayer(msg) {
+  #fromPlayer(run, msg) {
+    const ctx = this.#playerRuns.get(run)
+    if (msg.type === 'summary') {
+      this.lastSummary = { side: 'player', summary: msg.summary }
+      if (ctx?.testId) {
+        this.#post(ctx.conn, ctx.testId, 'player', msg.summary)
+        this.notice = `Stream test ${ctx.testId} finished; sending the results.`
+      }
+      return
+    }
+    if (msg.type === 'exit') this.#playerRuns.delete(run)
     const p = this.playing
+    if (!p || p.run !== run) return // an earlier run, already replaced
     switch (msg.type) {
       case 'offer':
-        p?.conn.signal(p.hostId, { kind: 'offer', sdp: msg.sdp, test_id: p.testId })
-        break
-      case 'summary':
-        this.lastSummary = { side: 'player', summary: msg.summary }
-        if (p?.testId) {
-          p.conn.postResult(p.testId, 'player', msg.summary)
-          this.notice = `Stream test ${p.testId} finished; results sent.`
-        }
+        p.conn.signal(p.hostId, { kind: 'offer', sdp: msg.sdp, test_id: p.testId })
         break
       case 'error':
         this.notice = msg.error
         this.playing = null
         break
       case 'exit':
-        if (p && !p.testId && msg.code) this.notice = `The game window closed (code ${msg.code}; its log: ${msg.log}).`
+        if (!p.testId && msg.code) this.notice = `The game window closed (code ${msg.code}; its log: ${msg.log}).`
         this.playing = null
         break
     }
+  }
+
+  // #post sends one side's results; a failure is said, and goes in app.log.
+  async #post(conn, testId, side, summary) {
+    const r = await conn.postResult(testId, side, summary)
+    if (r.status === 200) {
+      console.info(`stream test ${testId}: ${side} results stored`)
+      if (side === 'player') this.notice = `Stream test ${testId} finished; results sent.`
+      return
+    }
+    const why = r.json?.error || `the server answered ${r.status}`
+    console.error(`stream test ${testId}: couldn't store the ${side} results: ${why}`)
+    this.notice = `Stream test ${testId}: the ${side} results weren't saved (${why}).`
   }
 }
 

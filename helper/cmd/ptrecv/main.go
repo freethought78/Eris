@@ -26,6 +26,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/freethought78/eris/helper/internal/assemble"
@@ -347,7 +348,13 @@ func main() {
 	summaryFrom := mono.Now() + int64(*warmup)*int64(time.Second)
 	lastReport, lastBeat, lastFake := start, start, start
 
+	if *signal == "stdio" {
+		go watchStop()
+	}
 	for running := true; running; {
+		if stopAsked.Load() {
+			running = false
+		}
 		for ev := sdl.WaitEventTimeout(1); ev != nil; ev = sdl.PollEvent() {
 			switch e := ev.(type) {
 			case *sdl.QuitEvent:
@@ -614,12 +621,40 @@ func logCandidates(who, sdp string) {
 	}
 }
 
+var (
+	stdinOnce sync.Once
+	stdinScan *bufio.Scanner
+	stopAsked atomic.Bool // the app said "stop", or closed our stdin
+)
+
+// stdinLines is the app's messages to us, one scanner for the whole run.
+func stdinLines() *bufio.Scanner {
+	stdinOnce.Do(func() {
+		stdinScan = bufio.NewScanner(os.Stdin)
+		stdinScan.Buffer(make([]byte, 1<<20), 1<<20)
+	})
+	return stdinScan
+}
+
+// watchStop: once playing, the app can still end the run ("stop" when the
+// player leaves, joins another stream, or a stream test replaces this one).
+// The run then ends the normal way, so its summary still goes to the app.
+func watchStop() {
+	sc := stdinLines()
+	for sc.Scan() {
+		var m struct{ Type string }
+		if json.Unmarshal(sc.Bytes(), &m) == nil && m.Type == "stop" {
+			break
+		}
+	}
+	stopAsked.Store(true)
+}
+
 // negotiateStdio sends the offer to the Eris app, which passes it to the
 // host through the server, and waits for the answer.
 func negotiateStdio(pc *webrtc.PeerConnection) (*sig.Answer, error) {
 	emitJSON(map[string]any{"type": "offer", "sdp": pc.LocalDescription().SDP})
-	sc := bufio.NewScanner(os.Stdin)
-	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	sc := stdinLines()
 	for sc.Scan() {
 		var m struct {
 			Type, SDP, Error   string

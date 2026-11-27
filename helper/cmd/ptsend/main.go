@@ -128,6 +128,8 @@ type host struct {
 	sim  *netsim.Net
 	mu   sync.Mutex
 	busy bool
+	cur  *webrtc.PeerConnection // the player's connection, while there is one
+	peer int64                  // and who it is (stdio mode)
 }
 
 // stdioMsg is one JSON line between the Eris app and the helper (-signal stdio).
@@ -166,11 +168,25 @@ func (h *host) serveStdio() {
 		}
 		switch m.Type {
 		case "offer":
+			// The same member offering again has restarted their player (a
+			// stream test replacing an ordinary join, say): their old
+			// session ends, reporting as usual, and the new one starts.
+			h.mu.Lock()
+			again := h.busy && h.peer == m.Peer
+			h.mu.Unlock()
+			if again {
+				log.Printf("the player connected again; ending their earlier session")
+				h.endSession()
+			}
 			h.mu.Lock()
 			busy := h.busy
 			h.busy = true
+			if !busy {
+				h.peer = m.Peer
+			}
 			h.mu.Unlock()
 			if busy {
+				log.Printf("refused a second player: someone is already playing")
 				emit(stdioMsg{Type: "refused", Peer: m.Peer, Error: "someone is already playing"})
 				continue
 			}
@@ -187,8 +203,31 @@ func (h *host) serveStdio() {
 			}
 			emit(stdioMsg{Type: "answer", Peer: m.Peer, SDP: ans.SDP, Width: ans.Width, Height: ans.Height, FPS: ans.FPS})
 		case "stop":
+			h.endSession()
 			return
 		}
+	}
+	h.endSession()
+}
+
+// endSession ends the current player's session, if there is one, and waits
+// (up to 2 s) for its summary to go out: a stream test's host results.
+func (h *host) endSession() {
+	h.mu.Lock()
+	pc := h.cur
+	h.mu.Unlock()
+	if pc == nil {
+		return
+	}
+	pc.Close()
+	for i := 0; i < 40; i++ {
+		h.mu.Lock()
+		busy := h.busy
+		h.mu.Unlock()
+		if !busy {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 
@@ -241,6 +280,9 @@ func (h *host) startSession(offerSDP string, ended func(map[string]any)) (*sig.A
 	if err != nil {
 		return nil, err
 	}
+	h.mu.Lock()
+	h.cur = pc
+	h.mu.Unlock()
 	track, err := webrtc.NewTrackLocalStaticRTP(sig.Codec, "video", "eris")
 	if err != nil {
 		pc.Close()
@@ -314,11 +356,14 @@ func (h *host) startSession(offerSDP string, ended func(map[string]any)) (*sig.A
 				cancel()
 				pc.Close()
 				s.closePad()
-				h.mu.Lock()
-				h.busy = false
-				h.mu.Unlock()
 				log.Printf("player left; waiting for the next one")
 				ended(s.summary())
+				h.mu.Lock()
+				h.busy = false
+				if h.cur == pc {
+					h.cur = nil
+				}
+				h.mu.Unlock()
 			})
 		}
 	})

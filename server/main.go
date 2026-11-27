@@ -12,6 +12,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -20,9 +21,11 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -35,6 +38,7 @@ var (
 	public  = flag.String("public", "", "this server's internet address or name, for the join link it prints")
 	update  = flag.Bool("update", false, "update this program to the latest release on GitHub, then exit")
 	noCheck = flag.Bool("no-update-check", false, "don't check GitHub for a newer server at start-up")
+	owned   = flag.Bool("exit-with-stdin", false, "stop when stdin closes or reads \"stop\" (run by the Eris server dashboard, so the server never outlives it)")
 )
 
 func main() {
@@ -72,7 +76,38 @@ func main() {
 	if !*noCheck && !strings.HasSuffix(version, "-dev") {
 		go checkForUpdate(context.Background())
 	}
-	log.Fatal(srv.ListenAndServe())
+
+	// Stopping: Ctrl+C, a kill, or (-exit-with-stdin) the dashboard closing
+	// our stdin. Members' apps see the connection drop and reconnect later.
+	stop := make(chan string, 1)
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+	go func() { stop <- "stopped (" + (<-sigs).String() + ")" }()
+	if *owned {
+		go func() {
+			sc := bufio.NewScanner(os.Stdin)
+			for sc.Scan() {
+				if strings.TrimSpace(sc.Text()) == "stop" {
+					stop <- "stopped from the dashboard"
+					return
+				}
+			}
+			stop <- "stopped: the dashboard is gone"
+		}()
+	}
+	served := make(chan error, 1)
+	go func() { served <- srv.ListenAndServe() }()
+	select {
+	case err := <-served:
+		log.Fatal(err)
+	case why := <-stop:
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		hub.closeAll()
+		_ = srv.Shutdown(ctx)
+		cancel()
+		store.Close()
+		log.Print(why)
+	}
 }
 
 // routes is the HTTP API (DESIGN.md 3.4).
@@ -113,6 +148,7 @@ func routes(store *Store, hub *Hub) *http.ServeMux {
 	mux.HandleFunc("POST /api/tests", func(w http.ResponseWriter, r *http.Request) {
 		m, ok := authed(store, r)
 		if !ok {
+			log.Printf("test result from %s refused: unknown member token", r.RemoteAddr)
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unknown member token"})
 			return
 		}
@@ -123,6 +159,7 @@ func routes(store *Store, hub *Hub) *http.ServeMux {
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in); err != nil ||
 			(in.Side != "host" && in.Side != "player") || len(in.Summary) == 0 {
+			log.Printf("test result from %s refused: bad request (%v)", m.Name, err)
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "bad request"})
 			return
 		}

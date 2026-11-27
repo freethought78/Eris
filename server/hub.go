@@ -49,10 +49,19 @@ type Hub struct {
 	mu      sync.Mutex
 	clients map[int64]map[*client]bool
 	live    map[int64]liveInfo
+
+	done     chan struct{} // closed when the server stops
+	doneOnce sync.Once
 }
 
 func newHub(s *Store) *Hub {
-	return &Hub{store: s, clients: map[int64]map[*client]bool{}, live: map[int64]liveInfo{}}
+	return &Hub{store: s, clients: map[int64]map[*client]bool{}, live: map[int64]liveInfo{}, done: make(chan struct{})}
+}
+
+// closeAll tells every connected app the server is stopping (they reconnect
+// by themselves when it's back).
+func (h *Hub) closeAll() {
+	h.doneOnce.Do(func() { close(h.done) })
 }
 
 func encode(v any) []byte {
@@ -212,6 +221,14 @@ func (h *Hub) serveWS(w http.ResponseWriter, r *http.Request) {
 
 	ctx, stop := context.WithCancel(ctx)
 	defer stop()
+	go func() {
+		select {
+		case <-h.done:
+			conn.Close(websocket.StatusGoingAway, "the server is stopping")
+			stop()
+		case <-ctx.Done():
+		}
+	}()
 	go func() { // writer
 		ping := time.NewTicker(20 * time.Second)
 		defer ping.Stop()

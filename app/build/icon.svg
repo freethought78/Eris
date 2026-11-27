@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Eris: the Sacred Chao. Hodge and Podge, the golden apple of discord on
+       one side and the pentagon (with its 23) on the other. -->
+  <defs>
+    <radialGradient id="gold" cx="38%" cy="30%" r="75%">
+      <stop offset="0" stop-color="#fff1a8"/>
+      <stop offset="0.45" stop-color="#f7c22e"/>
+      <stop offset="1" stop-color="#b87400"/>
+    </radialGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffd659"/>
+      <stop offset="1" stop-color="#c78300"/>
+    </linearGradient>
+  </defs>
+  <circle cx="256" cy="256" r="246" fill="#0d1328"/>
+  <circle cx="256" cy="256" r="232" fill="#f2ecdc"/>
+  <path fill="#16213e" d="M256,24 A232,232 0 0,1 256,488 A116,116 0 0,1 256,256 A116,116 0 0,0 256,24 Z"/>
+  <circle cx="256" cy="256" r="232" fill="none" stroke="url(#rim)" stroke-width="14"/>
+
+  <!-- The pentagon, in the light half's head. -->
+  <g transform="translate(256,142) scale(0.88)">
+    <polygon fill="#e94560" stroke="#16213e" stroke-width="6" stroke-linejoin="round"
+      points="0,-80 76.1,-24.7 47,64.7 -47,64.7 -76.1,-24.7"/>
+    <text x="0" y="2" fill="#ffffff" font-family="DejaVu Sans, Arial, sans-serif" font-weight="bold"
+      font-size="66" text-anchor="middle" dominant-baseline="central" letter-spacing="-2">23</text>
+  </g>
+
+  <!-- The golden apple, in the dark half's head. -->
+  <g transform="translate(252,374) scale(0.84)">
+    <path d="M2,-58 C-2,-72 -4,-82 -12,-92" fill="none" stroke="#6b3d12" stroke-width="9" stroke-linecap="round"/>
+    <path d="M4,-66 C14,-96 50,-104 66,-90 C54,-66 26,-58 4,-66 Z" fill="#4ecca3" stroke="#0d1328" stroke-width="3"/>
+    <path fill="url(#gold)" stroke="#7a4a00" stroke-width="4"
+      d="M0,-50 C24,-72 82,-68 84,-8 C86,46 48,84 22,82 C12,81 6,76 0,76 C-6,76 -12,81 -22,82 C-48,84 -86,46 -84,-8 C-82,-68 -24,-72 0,-50 Z"/>
+    <ellipse cx="-38" cy="-22" rx="14" ry="24" fill="#ffffff" opacity="0.55" transform="rotate(25 -38 -22)"/>
+  </g>
+</svg>

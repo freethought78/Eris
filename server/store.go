@@ -68,6 +68,9 @@ func hashToken(t string) string {
 	return hex.EncodeToString(h[:])
 }
 
+// Close closes the database.
+func (s *Store) Close() error { return s.db.Close() }
+
 // Open opens (or creates) the data folder.
 func Open(dir string) (*Store, bool, error) {
 	if err := os.MkdirAll(filepath.Join(dir, "tests"), 0o700); err != nil {

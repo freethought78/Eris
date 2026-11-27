@@ -21,11 +21,45 @@ Two copies on one PC: `ERIS_PROFILE=name` keeps a separate server list and
 logs (`~/.config/Eris-name/`).
 
 For automated tests the app takes `--auto='{...}'`: `join` (`address`, `name`,
-`ownerCode`, `password`), `live: true`, and `testWith: "name"` with
-`seconds`. `./test-e2e.sh` uses it to run a server, a hosting copy and a
-playing copy on two private virtual screens, and passes when both sides'
-results are stored (first run 2026-11-26: 60 fps, nothing lost, 28 ms
-screen to screen, 100% decoded on the graphics card).
+`ownerCode`, `password`), `live: true`, `testWith: "name"` with `seconds`
+(and `testDelay`, seconds to wait first), and `watch: "name"` (join that
+member's stream as soon as they're live). `./test-e2e.sh` uses it to run a
+server, a hosting copy and a playing copy on two private virtual screens,
+and passes when both sides' results are stored (first run 2026-11-26: 60 fps,
+nothing lost, 28 ms screen to screen, 100% decoded on the graphics card).
+`./test-e2e.sh 20 watching` has the player already watching when the test
+starts, which is how the first test between two homes went: its results
+were lost, because the replaced player was killed before it could report,
+its ending wiped the new test's state in the app, and the host refused the
+new connection while the old one was still closing. Each helper run now has
+its own number in the app, a stopped helper ends its run and reports, and
+the host replaces a member's old session when they connect again.
+
+## Server dashboard
+
+`Eris --server` (or `npx electron . --server` from the source folder) runs
+this PC's eris-server in a small window: running or not, the join link, the
+owner code until it's used, the version, the data folder and the server's
+log, with **Restart** and **Stop server**. The server lives exactly as long
+as the window: closing the window stops it (cleanly: members' apps are told
+and reconnect when it's back), and the server runs with `-exit-with-stdin`,
+so if the dashboard dies any other way its stdin closes and it stops too.
+Only one dashboard runs at a time; starting another shows the first.
+
+The Linux AppImage carries the server (`resources/server/eris-server`), so
+updating the app updates the server: close and reopen the dashboard to run
+the new one. From the source folder it runs `../server/bin/eris-server`.
+Settings are in `~/.config/Eris-server/dashboard.json`: `data` (default
+`~/.config/Eris-server/server-data`), `addr` (`:7300`) and `public` (the
+name in the join link); its log is `logs/server.log` there.
+
+## Icon
+
+The Sacred Chao: Hodge and Podge, the golden apple of discord on one side
+and the pentagon with its 23 on the other. `build/icon.svg` is the source;
+`tools/make-icons.sh` draws it (with Electron's Chromium) into
+`build/icon.png` (Linux, the window) and `build/icon.ico` (Windows: the
+program, installer and shortcuts).
 
 Helper logs: `~/.config/Eris/logs/` (the app's own data folder).
 
@@ -38,10 +72,11 @@ npm run dist:linux    # out/Eris-0.1.0.AppImage
 
 Both bundle the helper (`resources/helper/`): on Windows the player only,
 from `../helper/dist/windows` (build it first with `../helper/build-windows.sh`);
-on Linux `ptsend` and `ptrecv` from `../helper/bin`. Built from Linux; the
-Windows build doesn't need Wine (the executable's icon and metadata are left
-as Electron's, `signAndEditExecutable: false`) and isn't code-signed, so
-Windows shows "Windows protected your PC" on first run.
+on Linux `ptsend` and `ptrecv` from `../helper/bin`. Built from Linux. The
+Windows build puts the icon into `Eris.exe` with rcedit, which electron-builder
+runs through Wine (the system `wine` and its default prefix, not a Bottles
+bottle). It isn't code-signed, so Windows shows "Windows protected your PC"
+on first run.
 
 The installer is 155 MB, mostly Electron and FFmpeg's full codec library
 (`avcodec-62.dll`, 92 MB); an FFmpeg build with only the H.264 decoder would

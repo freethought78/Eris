@@ -5,7 +5,11 @@
 # starts a stream test with the player; it passes when both sides' results
 # are stored on the server.
 #
-#   app/test-e2e.sh [seconds]        (default 20)
+#   app/test-e2e.sh [seconds] [watching]       (default 20)
+#
+# "watching": the player joins the stream first, the ordinary way, and the
+# test starts 10 s later and replaces that run (as in the first test between
+# two homes, whose results were lost that way).
 #
 # Needs the server, the helper and the app built: (cd server && go build -o
 # bin/eris-server .), (cd helper && go build -o bin/ ./cmd/...), (cd app &&
@@ -16,6 +20,8 @@ for d in :97 :98; do
 done
 R=$(cd "$(dirname "$0")/.." && pwd); T=$(mktemp -d); mkdir -p $T/data
 SECS=${1:-20}
+HOSTX=""; PLAYERX=""
+if [ "${2:-}" = watching ]; then HOSTX=',"testDelay":10'; PLAYERX=',"watch":"Host"'; fi
 pids=()
 cleanup() { for p in "${pids[@]}"; do kill $p 2>/dev/null; done; sleep 1; for p in "${pids[@]}"; do kill -9 $p 2>/dev/null; done; for n in ptsend ptrecv ptclock; do for p in $(pgrep -x $n); do kill $p 2>/dev/null; done; done; }
 trap cleanup EXIT
@@ -28,12 +34,12 @@ sleep 1
 DISPLAY=:97 $R/helper/bin/ptclock -busy -pattern shapes -noise 128 -w 2560 -h 1440 >/dev/null 2>&1 & pids+=($!)
 cd $R/app
 ERIS_PROFILE=e2e-host DISPLAY=:97 npx electron . --no-sandbox --disable-gpu \
-  --auto="{\"join\":{\"address\":\"127.0.0.1:7300\",\"name\":\"Host\",\"ownerCode\":\"$CODE\"},\"live\":true,\"testWith\":\"Player\",\"seconds\":$SECS}" \
+  --auto="{\"join\":{\"address\":\"127.0.0.1:7300\",\"name\":\"Host\",\"ownerCode\":\"$CODE\"},\"live\":true,\"testWith\":\"Player\",\"seconds\":$SECS$HOSTX}" \
   > $T/app-host.log 2>&1 & pids+=($!)
 sleep 2
 ERIS_PROFILE=e2e-player DISPLAY=:98 npx electron . --no-sandbox --disable-gpu \
-  --auto='{"join":{"address":"127.0.0.1:7300","name":"Player"}}' > $T/app-player.log 2>&1 & pids+=($!)
-for i in $(seq 1 $((SECS + 60))); do
+  --auto="{\"join\":{\"address\":\"127.0.0.1:7300\",\"name\":\"Player\"}$PLAYERX}" > $T/app-player.log 2>&1 & pids+=($!)
+for i in $(seq 1 $((SECS + 70))); do
   n=$(ls $T/data/tests 2>/dev/null | wc -l)
   [ "$n" -ge 2 ] && break
   sleep 1
@@ -41,6 +47,8 @@ done
 echo "== server log"; sed 's/^/  /' $T/server.log
 n=$(ls $T/data/tests | wc -l)
 echo "== results stored: $n"; ls $T/data/tests | sed 's/^/  /'
+for p in host player; do echo "== $p app.log"; sed 's/^/  /' ~/.config/Eris-e2e-$p/logs/app.log 2>/dev/null; done
+for p in host player; do cp -r ~/.config/Eris-e2e-$p/logs $T/logs-$p 2>/dev/null; done
 rm -rf ~/.config/Eris-e2e-host ~/.config/Eris-e2e-player
 echo "Logs: $T"
 if [ "$n" -ge 2 ]; then echo "PASS"; else echo "FAIL: expected both sides' results"; exit 1; fi

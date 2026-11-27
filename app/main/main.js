@@ -7,10 +7,14 @@ const fs = require('node:fs')
 const readline = require('node:readline')
 const { spawn, execFileSync } = require('node:child_process')
 const updater = require('./updater')
+const dashboard = require('./dashboard')
+
+// `Eris --server` is the server dashboard (dashboard.js), not the app.
+const dashboardMode = process.argv.includes('--server')
 
 // ERIS_PROFILE=name keeps a separate server list and logs, so two copies can
 // run on one PC (for testing).
-if (process.env.ERIS_PROFILE) {
+if (process.env.ERIS_PROFILE && !dashboardMode) {
   app.setPath('userData', path.join(app.getPath('appData'), 'Eris-' + process.env.ERIS_PROFILE))
 }
 
@@ -47,8 +51,9 @@ function startHelper(role, opts) {
   stopHelper(role)
   const name = role === 'host' ? 'ptsend' : 'ptrecv'
   const exe = helperExe(name)
+  const run = opts.run || 0 // the window's id for this run, on every message from it
   if (!fs.existsSync(exe)) {
-    send('helper', { role, msg: { type: 'error', error: `The streaming helper is missing (${exe}).` } })
+    send('helper', { role, run, msg: { type: 'error', error: `The streaming helper is missing (${exe}).` } })
     return
   }
   let args = ['-signal', 'stdio']
@@ -79,26 +84,28 @@ function startHelper(role, opts) {
   child.stderr.pipe(log)
   readline.createInterface({ input: child.stdout }).on('line', (line) => {
     try {
-      send('helper', { role, msg: JSON.parse(line) })
+      send('helper', { role, run, msg: JSON.parse(line) })
     } catch {
       log.write(line + '\n')
     }
   })
   child.on('exit', (code) => {
     if (helpers[role] === child) delete helpers[role]
-    send('helper', { role, msg: { type: 'exit', code, log: logPath } })
+    send('helper', { role, run, msg: { type: 'exit', code, log: logPath } })
   })
-  child.on('error', (err) => send('helper', { role, msg: { type: 'error', error: String(err) } }))
+  child.on('error', (err) => send('helper', { role, run, msg: { type: 'error', error: String(err) } }))
 }
 
 function stopHelper(role) {
   const child = helpers[role]
   if (!child) return
   delete helpers[role]
+  // Asked to stop, the helper ends its run and sends its summary (a stream
+  // test's results); it's killed only if it hasn't gone after 5 s.
   try {
     child.stdin.write(JSON.stringify({ type: 'stop' }) + '\n')
   } catch {}
-  setTimeout(() => child.kill(), 1500)
+  setTimeout(() => child.kill(), 5000)
 }
 
 function createWindow() {
@@ -107,6 +114,7 @@ function createWindow() {
     height: 720,
     backgroundColor: '#1a1a2e',
     title: 'Eris',
+    icon: path.join(__dirname, '..', 'build', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -192,11 +200,15 @@ ipcMain.handle('info', () => ({
   auto: autoConfig(),
 }))
 
-app.whenReady().then(() => {
-  createWindow()
-  updater.setup((s) => send('update', s))
-})
-app.on('window-all-closed', () => {
-  for (const role of Object.keys(helpers)) stopHelper(role)
-  app.quit()
-})
+if (dashboardMode) {
+  dashboard.start()
+} else {
+  app.whenReady().then(() => {
+    createWindow()
+    updater.setup((s) => send('update', s))
+  })
+  app.on('window-all-closed', () => {
+    for (const role of Object.keys(helpers)) stopHelper(role)
+    app.quit()
+  })
+}

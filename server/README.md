@@ -34,4 +34,10 @@ themselves (and suggest updating the app if the server is now newer).
 Release builds carry their version (`-ldflags "-X main.version=0.1.1"`; see
 `tools/release.sh`).
 
+**Stopping:** Ctrl+C or a kill (SIGTERM) stops it cleanly: members' apps
+are told the server is stopping and reconnect when it's back. With
+`-exit-with-stdin` it also stops when its stdin reads `stop` or closes; the
+app's server dashboard (`Eris --server`, see app/README.md) runs it that way,
+so the server never outlives the dashboard.
+
 Tests: `go test ./...`

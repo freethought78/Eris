@@ -37,6 +37,8 @@
     "files": [
       "main/**",
       "dist/**",
+      "build/icon.png",
+      "build/icon.svg",
       "package.json"
     ],
     "win": {
@@ -48,7 +50,7 @@
           ]
         }
       ],
-      "signAndEditExecutable": false,
+      "signAndEditExecutable": true,
       "extraResources": [
         {
           "from": "../helper/dist/windows",
@@ -59,12 +61,15 @@
             "FFMPEG-LICENSE.txt"
           ]
         }
-      ]
+      ],
+      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": true,
       "perMachine": false,
-      "artifactName": "Eris-Setup-${version}.${ext}"
+      "artifactName": "Eris-Setup-${version}.${ext}",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico"
     },
     "linux": {
       "target": [
@@ -80,8 +85,16 @@
             "ptsend",
             "ptrecv"
           ]
+        },
+        {
+          "from": "../server/bin",
+          "to": "server",
+          "filter": [
+            "eris-server"
+          ]
         }
-      ]
+      ],
+      "icon": "build/icon.png"
     },
     "publish": [
       {
