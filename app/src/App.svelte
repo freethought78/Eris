@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import { Conn, join } from './lib/conn.svelte.js'
   import { stream } from './lib/stream.svelte.js'
+  import { update } from './lib/update.svelte.js'
   import AddServer from './lib/AddServer.svelte'
   import Results from './lib/Results.svelte'
 
@@ -23,10 +24,11 @@
 
   onMount(async () => {
     info = await window.eris.info()
+    Conn.appVersion = info.version
     servers = await window.eris.loadServers()
     for (const s of servers) connect(s)
     selected = servers[0]?.address || null
-    if (info.auto) runAuto(info.auto)
+    if (info.auto) runAuto(info.auto).catch((e) => console.error('auto test:', e))
   })
 
   async function added(entry) {
@@ -48,7 +50,20 @@
 
   // Automated tests start the app with --auto='{...}' (see app/README.md).
   async function runAuto(a) {
-    if (a.join && !servers.some((s) => s.address === a.join.address)) {
+    console.info(`auto test: Eris ${info.version}`, JSON.stringify(a))
+    if (a.update) {
+      // Accept an update as soon as one is offered (testing updates).
+      const t = setInterval(() => {
+        if (update.state === 'available') update.download()
+        if (update.state === 'ready') {
+          clearInterval(t)
+          console.info(`auto test: installing ${update.version}`)
+          update.install()
+        }
+      }, 500)
+    }
+    if (!a.join) return
+    if (!servers.some((s) => s.address === a.join.address)) {
       const r = await join(a.join.address, a.join.name, a.join.password || '', a.join.ownerCode || '')
       await added({ address: a.join.address, token: r.token, name: r.member.name, role: r.member.role })
     }
@@ -66,6 +81,20 @@
 
   let others = $derived(conn ? conn.members.filter((m) => m.id !== conn.you?.id) : [])
 </script>
+
+{#if update.state === 'available' || update.state === 'downloading' || update.state === 'ready'}
+  <div class="updatebar">
+    {#if update.state === 'available'}
+      Eris {update.version} is available (you have {info.version}).
+      <button class="primary" onclick={() => update.download()}>Update</button>
+    {:else if update.state === 'downloading'}
+      Downloading Eris {update.version}... {update.percent}%
+    {:else}
+      Eris {update.version} is ready.
+      <button class="primary" onclick={() => update.install()}>Restart and update</button>
+    {/if}
+  </div>
+{/if}
 
 <div class="layout">
   <nav class="servers">
@@ -89,7 +118,7 @@
       <header>
         <div>
           <h1>{conn.serverName || conn.entry.address}</h1>
-          <span class="muted">{conn.entry.address} · you are {conn.you?.name || conn.entry.name}{conn.you?.role === 'owner' ? ' (owner)' : ''} · {conn.status}</span>
+          <span class="muted">{conn.entry.address} · you are {conn.you?.name || conn.entry.name}{conn.you?.role === 'owner' ? ' (owner)' : ''} · {conn.status}{conn.serverVersion ? ` · server ${conn.serverVersion}` : ''} · app {info.version}</span>
         </div>
         <div class="actions">
           {#if info.canHost}
@@ -103,6 +132,31 @@
         </div>
       </header>
 
+      {#if conn.status === 'outdated'}
+        <div class="outdated">
+          <p>
+            This server has been updated to Eris <b>{conn.serverVersion}</b>, and you have {info.version}. Update
+            Eris before reconnecting, so everything works together.
+          </p>
+          <div class="actions">
+            {#if update.state === 'available'}
+              <button class="primary" onclick={() => update.download()}>Update to {update.version}</button>
+            {:else if update.state === 'downloading'}
+              <span>Downloading... {update.percent}%</span>
+            {:else if update.state === 'ready'}
+              <button class="primary" onclick={() => update.install()}>Restart and update</button>
+            {:else if update.state === 'dev'}
+              <span class="muted">This copy runs from the source folder and can't update itself.</span>
+            {:else if update.state === 'error'}
+              <span class="error">Couldn't check for updates: {update.error}</span>
+              <button onclick={() => update.check()}>Try again</button>
+            {:else}
+              <span class="muted">Checking for an update...</span>
+            {/if}
+            <button onclick={() => ((conn.ignoreVersion = true), conn.connect())}>Connect anyway</button>
+          </div>
+        </div>
+      {/if}
       {#if conn.error}<p class="error">{conn.error}</p>{/if}
       {#if stream.notice}<p class="notice">{stream.notice}</p>{/if}
 
@@ -147,6 +201,9 @@
 
 <style>
   .layout { display: flex; height: 100%; }
+  .updatebar { background: var(--accent); padding: 8px 16px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--border); }
+  .outdated { background: var(--surface-2); border-left: 3px solid var(--warn); padding: 10px 14px; border-radius: var(--radius); margin: 12px 0; }
+  .outdated p { margin: 0 0 8px; }
   .servers { width: 64px; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px 0; }
   .icon { position: relative; width: 44px; height: 44px; border-radius: 14px; padding: 0; text-transform: uppercase; font-weight: 600; }
   .icon.sel { background: var(--highlight); }

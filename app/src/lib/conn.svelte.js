@@ -1,5 +1,9 @@
 // One connection to one server: who's there, who's live, test results, and
-// the live WebSocket (DESIGN.md 3.4). Reconnects by itself.
+// the live WebSocket (DESIGN.md 3.4). Reconnects by itself (the server may
+// restart, after an update for example). Before each connection it asks the
+// server's version: if the server is newer than this app, it stops there and
+// suggests updating the app first ("outdated"); the user can connect anyway.
+import { newer } from './version.js'
 
 export function httpBase(address) {
   return address.includes('://') ? address.replace(/^eris:\/\//, 'http://') : 'http://' + address
@@ -10,7 +14,11 @@ export function wsUrl(address) {
 }
 
 export class Conn {
-  status = $state('connecting') // connecting, online, offline, rejected
+  static appVersion = '0.0.0'
+
+  status = $state('connecting') // connecting, online, offline, rejected, outdated
+  serverVersion = $state('')
+  ignoreVersion = false
   error = $state('')
   you = $state(null)
   serverName = $state('')
@@ -32,9 +40,25 @@ export class Conn {
     this.#handlers[kind].push(fn)
   }
 
-  connect() {
+  async connect() {
     clearTimeout(this.#retry)
     this.status = 'connecting'
+    const info = await window.eris.api({ method: 'GET', url: httpBase(this.entry.address) + '/api/info' })
+    if (this.#closed) return
+    if (info.status !== 200) {
+      this.status = 'offline'
+      this.error = info.status === 0 ? `Can't reach the server (${info.json?.error || 'no answer'}). Trying again...` : ''
+      this.#later()
+      return
+    }
+    this.serverVersion = info.json.version || ''
+    if (!this.ignoreVersion && newer(this.serverVersion, Conn.appVersion)) {
+      console.info(`server ${this.entry.address} runs ${this.serverVersion}, newer than this app (${Conn.appVersion}): suggesting an update`)
+      this.status = 'outdated'
+      this.error = ''
+      window.eris.checkUpdate()
+      return
+    }
     let ws
     try {
       ws = new WebSocket(wsUrl(this.entry.address))
@@ -107,6 +131,7 @@ export class Conn {
       case 'hello':
         this.status = 'online'
         this.error = ''
+        this.serverVersion = m.server?.version || this.serverVersion
         this.you = m.you
         this.serverName = m.server?.name || ''
         this.members = m.members

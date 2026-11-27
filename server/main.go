@@ -12,6 +12,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -25,16 +26,23 @@ import (
 	"time"
 )
 
-const version = "0.1.0-dev"
+// version is set at release builds (-ldflags "-X main.version=0.1.0").
+var version = "0.1.0-dev"
 
 var (
-	addr   = flag.String("addr", ":7300", "address to listen on (HTTP and WebSocket)")
-	data   = flag.String("data", "", "data folder (default: eris-data next to the program)")
-	public = flag.String("public", "", "this server's internet address or name, for the join link it prints")
+	addr    = flag.String("addr", ":7300", "address to listen on (HTTP and WebSocket)")
+	data    = flag.String("data", "", "data folder (default: eris-data next to the program)")
+	public  = flag.String("public", "", "this server's internet address or name, for the join link it prints")
+	update  = flag.Bool("update", false, "update this program to the latest release on GitHub, then exit")
+	noCheck = flag.Bool("no-update-check", false, "don't check GitHub for a newer server at start-up")
 )
 
 func main() {
 	flag.Parse()
+	if *update {
+		runUpdate()
+		return
+	}
 	dir := *data
 	if dir == "" {
 		exe, err := os.Executable()
@@ -60,6 +68,9 @@ func main() {
 		}
 		_, port, _ := strings.Cut(*addr, ":")
 		fmt.Printf("\n  Join link: eris://%s:%s\n  Owner code (first join only): %s\n\n", host, port, st.OwnerCode)
+	}
+	if !*noCheck && !strings.HasSuffix(version, "-dev") {
+		go checkForUpdate(context.Background())
 	}
 	log.Fatal(srv.ListenAndServe())
 }

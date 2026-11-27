@@ -26,4 +26,12 @@ What it does now:
   and `GET /api/tests`. Each result is also written to `eris-data/tests/` as a
   JSON file, so it can be read without the app.
 
+**Updating:** at start-up (then daily) it checks Eris's GitHub releases and
+says when a newer server is out. `eris-server -update` downloads it, checks it
+against the release's SHA256SUMS, and replaces the program (the old one is
+kept as `eris-server.old`); restart it, and connected apps reconnect by
+themselves (and suggest updating the app if the server is now newer).
+Release builds carry their version (`-ldflags "-X main.version=0.1.1"`; see
+`tools/release.sh`).
+
 Tests: `go test ./...`

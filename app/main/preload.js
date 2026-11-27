@@ -9,6 +9,15 @@ contextBridge.exposeInMainWorld('eris', {
   startHelper: (role, opts) => ipcRenderer.invoke('helper-start', { role, opts }),
   stopHelper: (role) => ipcRenderer.invoke('helper-stop', role),
   sendHelper: (role, msg) => ipcRenderer.invoke('helper-send', { role, msg }),
+  updateStatus: () => ipcRenderer.invoke('update-status'),
+  checkUpdate: () => ipcRenderer.invoke('update-check'),
+  downloadUpdate: () => ipcRenderer.invoke('update-download'),
+  installUpdate: () => ipcRenderer.invoke('update-install'),
+  onUpdate: (fn) => {
+    const h = (_e, data) => fn(data)
+    ipcRenderer.on('update', h)
+    return () => ipcRenderer.removeListener('update', h)
+  },
   onHelper: (fn) => {
     const h = (_e, data) => fn(data)
     ipcRenderer.on('helper', h)

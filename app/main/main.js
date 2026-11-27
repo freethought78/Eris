@@ -6,6 +6,7 @@ const path = require('node:path')
 const fs = require('node:fs')
 const readline = require('node:readline')
 const { spawn, execFileSync } = require('node:child_process')
+const updater = require('./updater')
 
 // ERIS_PROFILE=name keeps a separate server list and logs, so two copies can
 // run on one PC (for testing).
@@ -114,15 +115,25 @@ function createWindow() {
     },
   })
   win.setMenuBarVisibility(false)
+  // The window's console goes to logs/app.log, to find problems on a PC we
+  // can't see.
+  fs.mkdirSync(userFile('logs'), { recursive: true })
+  const appLog = fs.createWriteStream(userFile(path.join('logs', 'app.log')), { flags: 'a' })
+  appLog.write(`--- ${new Date().toISOString()} Eris ${app.getVersion()} on ${process.platform}\n`)
+  win.webContents.on('console-message', (e) => appLog.write(`[${e.level}] ${e.message}\n`))
+  win.webContents.on('render-process-gone', (_e, d) => appLog.write(`window process gone: ${d.reason}\n`))
   win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'))
 }
 
-// For automated tests: --auto='{"join":...}' is handed to the window.
+// For automated tests: --auto='{"join":...}' or ERIS_AUTO='{...}' is handed
+// to the window. (On Windows the command line loses JSON's quotes, so tests
+// there use the environment.)
 function autoConfig() {
   const a = process.argv.find((x) => x.startsWith('--auto='))
-  if (!a) return null
+  const text = a ? a.slice('--auto='.length) : process.env.ERIS_AUTO
+  if (!text) return null
   try {
-    return JSON.parse(a.slice('--auto='.length))
+    return JSON.parse(text)
   } catch {
     return null
   }
@@ -163,6 +174,11 @@ ipcMain.handle('api', async (_e, { method, url, token, body }) => {
   }
 })
 
+ipcMain.handle('update-status', () => updater.status())
+ipcMain.handle('update-check', () => updater.check())
+ipcMain.handle('update-download', () => updater.download())
+ipcMain.handle('update-install', () => updater.install())
+
 ipcMain.handle('helper-start', (_e, { role, opts }) => startHelper(role, opts || {}))
 ipcMain.handle('helper-stop', (_e, role) => stopHelper(role))
 ipcMain.handle('helper-send', (_e, { role, msg }) => {
@@ -176,7 +192,10 @@ ipcMain.handle('info', () => ({
   auto: autoConfig(),
 }))
 
-app.whenReady().then(createWindow)
+app.whenReady().then(() => {
+  createWindow()
+  updater.setup((s) => send('update', s))
+})
 app.on('window-all-closed', () => {
   for (const role of Object.keys(helpers)) stopHelper(role)
   app.quit()

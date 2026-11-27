@@ -6,3 +6,4 @@ app/dist/
 app/out/
 server/eris-data/
 server/bin/
+dist/

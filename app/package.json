@@ -9,7 +9,9 @@
   "scripts": {
     "build": "vite build",
     "start": "vite build && electron .",
-    "dev": "vite build && electron . --no-sandbox"
+    "dev": "vite build && electron . --no-sandbox",
+    "dist:win": "vite build && electron-builder --win nsis --x64",
+    "dist:linux": "vite build && electron-builder --linux AppImage"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "7.3.1",
@@ -20,5 +22,73 @@
   },
   "dependencies": {
     "electron-updater": "6.8.12"
+  },
+  "author": "Alex Brough",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/freethought78/Eris"
+  },
+  "build": {
+    "appId": "net.eris.app",
+    "productName": "Eris",
+    "directories": {
+      "output": "out"
+    },
+    "files": [
+      "main/**",
+      "dist/**",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "signAndEditExecutable": false,
+      "extraResources": [
+        {
+          "from": "../helper/dist/windows",
+          "to": "helper",
+          "filter": [
+            "ptrecv.exe",
+            "*.dll",
+            "FFMPEG-LICENSE.txt"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "artifactName": "Eris-Setup-${version}.${ext}"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Network",
+      "artifactName": "Eris-${version}.${ext}",
+      "extraResources": [
+        {
+          "from": "../helper/bin",
+          "to": "helper",
+          "filter": [
+            "ptsend",
+            "ptrecv"
+          ]
+        }
+      ]
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "freethought78",
+        "repo": "Eris"
+      }
+    ]
   }
 }

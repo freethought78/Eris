@@ -29,6 +29,51 @@ screen to screen, 100% decoded on the graphics card).
 
 Helper logs: `~/.config/Eris/logs/` (the app's own data folder).
 
-Not built yet: the Windows build and installer, live updates (electron-updater
-on Eris's GitHub releases), the `eris://` link type, and everything chat and
-voice.
+## Packaging
+
+```bash
+npm run dist:win      # out/Eris-Setup-0.1.0.exe (NSIS, per-user, no admin)
+npm run dist:linux    # out/Eris-0.1.0.AppImage
+```
+
+Both bundle the helper (`resources/helper/`): on Windows the player only,
+from `../helper/dist/windows` (build it first with `../helper/build-windows.sh`);
+on Linux `ptsend` and `ptrecv` from `../helper/bin`. Built from Linux; the
+Windows build doesn't need Wine (the executable's icon and metadata are left
+as Electron's, `signAndEditExecutable: false`) and isn't code-signed, so
+Windows shows "Windows protected your PC" on first run.
+
+The installer is 155 MB, mostly Electron and FFmpeg's full codec library
+(`avcodec-62.dll`, 92 MB); an FFmpeg build with only the H.264 decoder would
+cut most of the latter.
+
+**The Windows app can't be tested in a Bottles bottle.** It installs fine
+(silently, `Eris-Setup-0.1.0.exe /S`, into `AppData\Local\Programs\eris`),
+but Electron crashes inside Wine during start-up ("stack overflow" in the
+same place every time, with or without `--no-sandbox`, `--disable-gpu`,
+`--in-process-gpu`), before any of our code runs. The bottle still tests the
+Windows helper (`../helper/run-bottle.sh`). The Windows app needs real
+Windows: a player's PC or a Windows virtual machine.
+
+The app takes test settings from `ERIS_AUTO` as well as `--auto=` (Windows
+command lines lose the JSON's quotes), and writes its window's console to
+`logs/app.log` in its data folder (`%APPDATA%\Eris` on Windows).
+
+## Updates and versions
+
+- **Live updates** (`main/updater.js`): the installed Windows app and the
+  Linux AppImage check Eris's GitHub releases at start-up and every 6 hours,
+  show a banner, and update on the user's word (download, then "Restart and
+  update"). `ERIS_UPDATE_URL` points them at a local folder of the same files,
+  for testing. Tested 2026-11-26: a 0.1.0 AppImage found 0.1.1, downloaded
+  it, replaced itself and restarted as 0.1.1 within 5 s.
+- **Versions against the server:** before every connection (and every
+  reconnect, as when the server restarts after an update) the app asks the
+  server's version; if the server is newer, it holds off and suggests
+  updating, with "Connect anyway". Tested: an app on server 0.1.0, the server
+  restarted as 0.1.1, the app held off and offered the 0.1.1 update.
+- **Releases:** `tools/release.sh VERSION [--publish]` builds the app, server
+  and helper at one version, plus SHA256SUMS; `--publish` tags and creates the
+  GitHub release that apps and `eris-server -update` look for.
+
+Not built yet: the `eris://` link type, and everything chat and voice.
