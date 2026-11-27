@@ -32,8 +32,8 @@ up to commit `ea7f535`. It is replaced, not extended.
 - Anonymity or protection from the server host. The host can read what's stored on their
   server.
 - Browser access. Everyone uses the installed app.
-- Code signing, auto-update, encrypted server connections, automatic port forwarding. All
-  can be added later without redesign.
+- Code signing, encrypted server connections, automatic port forwarding. All can be added
+  later without redesign.
 
 ---
 
@@ -208,6 +208,22 @@ is a Go Live stream that also accepts controllers.
     in a row that holds (up to 25%). A raise that fails doubles the wait before the next.
   - **Recovery packets come out of the same budget,** and loss seen while the link is full
     doesn't make more of them (5.6).
+- **Resolution and frame rate, not just bitrate (quality ladder).** Bitrate alone isn't
+  enough: a player's PC that can't decode 1440p at 60 fps is no better off at a lower
+  bitrate, and a slow link at 1.5 Mbps gives a smeared 1440p picture where a clean 720p one
+  would look better. The host steps through rungs (native, 1080p, 900p, 720p at 60 fps, then
+  720p at 45 and 30, then 540p at 30), scaling on the graphics card before encoding:
+  - **Down when the player is overloaded:** the player reports how busy decoding and drawing
+    keep it, and whether the graphics card really decodes. Over about 85% busy, step down.
+  - **Down when the bitrate is too low for the picture:** under about 0.04 bits per pixel the
+    picture smears; a smaller picture at the same bitrate looks better.
+  - **Up slowly** when the player has room and the bitrate would still be comfortable at the
+    next rung up, with the same backing-off as raising the bitrate.
+- **The player never builds a backlog.** Packets are timed when they arrive, so a slow player
+  isn't mistaken for a slow network. If decoding falls behind by more than a couple of
+  frames, the player throws away what's queued and asks for a keyframe: a moment's glitch
+  instead of seconds of delay (seen in the first test between two homes, where a player at
+  50 fps fell 16 s behind and auto-quality wrongly cut the bitrate to its floor).
 
 ### 5.2 Game audio without Eris voice
 
@@ -335,6 +351,22 @@ The only part with real uncertainty, so it comes first.
 **Pass:** host-to-player delay inside the target on Linux and Windows. **Fail:** fall back to
 Selkies for Linux hosts and Electron's built-in WebRTC capture elsewhere, and revisit.
 
+### Order, revised after the first test between two homes (2026-11-26)
+
+Testing with a friend by command lines and zip files doesn't work: it's slow to set up and
+nobody wants to help. So before more remote tests:
+
+1. **A stable streaming baseline,** testable on one PC: no player backlog, the quality ladder
+   and player load reports (5.1), tested with the network simulator, a simulated slow
+   player and the Windows player in a Bottles bottle.
+2. **A minimal Eris app and server** (parts of Phase 1 and Phase 4 brought forward): the
+   friend installs the app once, joins the server the normal way, and joins a stream from a
+   button.
+3. **Built-in stream tests:** both apps take part, and both sides' measurements come back to
+   the streamer automatically, shown in the app and saved on their PC.
+4. **Live updates** (no longer left out of v1): the app checks Eris's GitHub releases,
+   asks, and updates itself, the same way as FT Assistant. The repository is public for this.
+
 ### Phase 1 — Server and text
 
 eris-server with SQLite, member tokens, roles, text channels, history, attachments,
@@ -396,7 +428,7 @@ zip, SDP encryption, the Node server.
 
 Threads, reactions, embeds and link previews, direct messages, friends, search, custom
 emoji, detailed per-channel permissions, encrypted server connections, automatic port
-forwarding, auto-update, code signing, macOS. None of these need a redesign to add.
+forwarding, code signing, macOS. None of these need a redesign to add.
 
 ---
 

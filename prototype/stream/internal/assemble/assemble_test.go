@@ -57,7 +57,7 @@ func run(t *testing.T, frames []sent, loss float64, rng *rand.Rand) (delivered, 
 	var lastTS uint32
 	haveLast := false
 	a := &Assembler{
-		Deliver: func(pkts []*rtp.Packet, _ bool, _ time.Duration) {
+		Deliver: func(pkts []*rtp.Packet, _ bool, _ time.Duration, _ time.Time) {
 			ts := pkts[0].Timestamp
 			if haveLast && !newer(ts, lastTS) {
 				t.Fatalf("frame %d delivered after %d", ts, lastTS)
@@ -136,7 +136,7 @@ func TestCutShortFramesCountAsLate(t *testing.T) {
 	rng := rand.New(rand.NewPCG(4, 4))
 	frames := stream(rng, 100, func(k int) int { return 1 + k/5 })
 	now := time.Unix(0, 0)
-	a := &Assembler{Deliver: func([]*rtp.Packet, bool, time.Duration) {}, Lost: func() {}}
+	a := &Assembler{Deliver: func([]*rtp.Packet, bool, time.Duration, time.Time) {}, Lost: func() {}}
 	for _, f := range frames {
 		keep := len(f.media)
 		if keep > 6 {

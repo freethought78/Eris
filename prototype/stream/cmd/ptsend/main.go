@@ -32,6 +32,7 @@ import (
 	"github.com/freethought78/eris/prototype/stream/internal/clock"
 	"github.com/freethought78/eris/prototype/stream/internal/fec"
 	"github.com/freethought78/eris/prototype/stream/internal/flv"
+	"github.com/freethought78/eris/prototype/stream/internal/ladder"
 	"github.com/freethought78/eris/prototype/stream/internal/mono"
 	"github.com/freethought78/eris/prototype/stream/internal/nal"
 	"github.com/freethought78/eris/prototype/stream/internal/netsim"
@@ -48,27 +49,28 @@ import (
 )
 
 var (
-	listen   = flag.String("listen", "127.0.0.1:7400", "address for the player to connect to")
-	display  = flag.String("display", os.Getenv("DISPLAY"), "X display to capture")
-	region   = flag.String("region", "2560x1440+0+0", "capture region WxH+X+Y")
-	fps      = flag.Int("fps", 60, "capture frame rate")
-	kbps     = flag.Int("kbps", 12000, "starting bitrate, and the most auto-quality goes to unless -max-kbps")
-	auto     = flag.Bool("auto", true, "auto-quality: follow what the player's connection carries")
-	minKbps  = flag.Int("min-kbps", 1500, "auto-quality's lowest bitrate (video and recovery packets)")
-	maxKbps  = flag.Int("max-kbps", 0, "auto-quality's highest bitrate (0 = -kbps)")
-	target   = flag.Duration("target", 15*time.Millisecond, "auto-quality: how far frames may queue behind their best delay")
-	encoder  = flag.String("encoder", "nvenc", "nvenc or x264")
-	usePad   = flag.Bool("pad", false, "plug in a virtual controller and apply the player's input")
-	stun     = flag.String("stun", "", "optional STUN server, e.g. stun:stun.l.google.com:19302")
-	netSim   = flag.String("net", "", "simulate a bad network for what the host sends, e.g. delay=20ms,jitter=5ms,loss=1%,burst=2,kbps=20000 (see netsim)")
-	kbpsAt   = flag.String("kbps-at", "", "for testing the encoder: change the bitrate at set times, e.g. 5s:4000,10s:12000")
-	paceMode = flag.String("pace", "auto", "spread each frame's packets just above the player's measured link speed: auto (once the link is seen dropping bursts), on, or off")
-	fecMode  = flag.String("fec", "auto", "recovery packets: auto (follow the player's reported loss), off, or a fixed percentage such as 20")
-	udpPort  = flag.Int("udp-port", 0, "carry all WebRTC traffic on this one UDP port, for forwarding on the router (0 = any)")
-	public   = flag.String("public", "", "this machine's internet address (IP or name, e.g. a dynamic DNS name), offered to the player")
-	iface    = flag.String("iface", "", "use only this network interface (default: all but Docker, VPN and bridge ones)")
-	token    = flag.String("token", "", "secret the player must give; made up and printed if empty and -listen isn't loopback")
-	pipe     = flag.String("pipeline", "lib", "lib: capture and encode with FFmpeg's libraries in this program (NVENC only); ffmpeg: run the ffmpeg program (for comparison)")
+	listen    = flag.String("listen", "127.0.0.1:7400", "address for the player to connect to")
+	display   = flag.String("display", os.Getenv("DISPLAY"), "X display to capture")
+	region    = flag.String("region", "2560x1440+0+0", "capture region WxH+X+Y")
+	fps       = flag.Int("fps", 60, "capture frame rate")
+	kbps      = flag.Int("kbps", 12000, "starting bitrate, and the most auto-quality goes to unless -max-kbps")
+	auto      = flag.Bool("auto", true, "auto-quality: follow what the player's connection carries")
+	minKbps   = flag.Int("min-kbps", 1500, "auto-quality's lowest bitrate (video and recovery packets)")
+	maxKbps   = flag.Int("max-kbps", 0, "auto-quality's highest bitrate (0 = -kbps)")
+	target    = flag.Duration("target", 15*time.Millisecond, "auto-quality: how far frames may queue behind their best delay")
+	encoder   = flag.String("encoder", "nvenc", "nvenc or x264")
+	usePad    = flag.Bool("pad", false, "plug in a virtual controller and apply the player's input")
+	stun      = flag.String("stun", "", "optional STUN server, e.g. stun:stun.l.google.com:19302")
+	netSim    = flag.String("net", "", "simulate a bad network for what the host sends, e.g. delay=20ms,jitter=5ms,loss=1%,burst=2,kbps=20000 (see netsim)")
+	kbpsAt    = flag.String("kbps-at", "", "for testing the encoder: change the bitrate at set times, e.g. 5s:4000,10s:12000")
+	useLadder = flag.Bool("ladder", true, "step resolution and frame rate down for a struggling player or link, and back up (package ladder)")
+	paceMode  = flag.String("pace", "auto", "spread each frame's packets just above the player's measured link speed: auto (once the link is seen dropping bursts), on, or off")
+	fecMode   = flag.String("fec", "auto", "recovery packets: auto (follow the player's reported loss), off, or a fixed percentage such as 20")
+	udpPort   = flag.Int("udp-port", 0, "carry all WebRTC traffic on this one UDP port, for forwarding on the router (0 = any)")
+	public    = flag.String("public", "", "this machine's internet address (IP or name, e.g. a dynamic DNS name), offered to the player")
+	iface     = flag.String("iface", "", "use only this network interface (default: all but Docker, VPN and bridge ones)")
+	token     = flag.String("token", "", "secret the player must give; made up and printed if empty and -listen isn't loopback")
+	pipe      = flag.String("pipeline", "lib", "lib: capture and encode with FFmpeg's libraries in this program (NVENC only); ffmpeg: run the ffmpeg program (for comparison)")
 )
 
 var width, height, offX, offY int
@@ -96,6 +98,14 @@ func main() {
 	log.Printf("ptsend: capturing %s %s at %d fps, %d kbps, %s, auto-quality %v; waiting for a player on http://%s",
 		*display, *region, *fps, *kbps, *encoder, *auto, *listen)
 	log.Fatal(http.ListenAndServe(*listen, nil))
+}
+
+// ladderRungs is the quality ladder for the captured region at -fps.
+func ladderRungs() []ladder.Rung {
+	if !*useLadder {
+		return []ladder.Rung{{W: width, H: height, FPS: *fps}}
+	}
+	return ladder.Rungs(width, height, *fps)
 }
 
 func loopback(addr string) bool {
@@ -183,6 +193,8 @@ func (h *host) startSession(body io.Reader) (*sig.Answer, error) {
 	}
 	s := &session{pc: pc, track: track, fecTrack: fecTrack, cancel: cancel, sim: h.sim,
 		out:       make(chan outFrame, 4),
+		lad:       ladder.New(ladderRungs()),
+		rungCh:    make(chan ladder.Rung, 1),
 		ctl:       rate.New(rate.Config{StartKbps: *kbps, MinKbps: *minKbps, MaxKbps: ceiling, Target: *target}),
 		videoKbps: *kbps,
 		pkt:       rtp.NewPacketizer(1200, 0, 0, &codecs.H264Payloader{}, rtp.NewRandomSequencer(), 90000),
@@ -264,6 +276,9 @@ type session struct {
 	fecSeq   uint16
 
 	out       chan outFrame
+	lad       *ladder.Ladder   // picture size and frame rate (package ladder)
+	rungCh    chan ladder.Rung // a new rung for the encoder loop
+	curFPS    int              // frame rate being encoded
 	pacer     pace.Rate
 	paceKbps  float64      // pacing rate used for the last frame
 	tail      pace.Tail    // where lost packets were, over the last couple of seconds
@@ -280,7 +295,12 @@ type session struct {
 	lastSet   int64        // when the encoder's bitrate was last changed
 	lastKey   int64        // when a keyframe was last made on request
 	rcvdBytes int64        // reported by the player, since the last log line
-	logSent   int64
+	// The player's load, from its reports: the busiest report and the
+	// frames it skipped since the last log line, and its latest picture.
+	pBusy, pSkipped, pHW int
+	pDecUs               int64
+	pW, pH               int
+	logSent              int64
 
 	fecAuto bool
 	fecPct  float64 // fixed percentage when not auto; 0 = off
@@ -460,7 +480,10 @@ func (s *session) send(au []byte, key bool, capNs, encNs int64) {
 	s.mu.Unlock()
 	buf = append(buf, nal.MakeSEI(capNs, encNs)...)
 	buf = append(buf, au...)
-	pkts := s.pkt.Packetize(buf, uint32(90000 / *fps))
+	s.mu.Lock()
+	frameFPS := max(s.curFPS, 1)
+	s.mu.Unlock()
+	pkts := s.pkt.Packetize(buf, uint32(90000/frameFPS))
 	// Recovery packets go right behind the frame, so a player missing some of
 	// its packets only waits for these.
 	recs, err := fec.Encode(pkts, s.parity)
@@ -563,17 +586,6 @@ func (s *session) streamLib(ctx context.Context) {
 		log.Printf("-pipeline lib supports -encoder nvenc only; use -pipeline ffmpeg")
 		return
 	}
-	enc, err := avenc.New(*display, width, height, offX, offY, *fps, *kbps, "h264_nvenc")
-	if err != nil {
-		log.Printf("%v", err)
-		return
-	}
-	defer enc.Close()
-	s.mu.Lock()
-	s.enc = enc
-	s.mu.Unlock()
-	defer func() { s.mu.Lock(); s.enc = nil; s.mu.Unlock() }()
-	log.Printf("encoding: FFmpeg libraries, x11grab + h264_nvenc in this program")
 	if *kbpsAt != "" {
 		for _, step := range strings.Split(*kbpsAt, ",") {
 			at, k, ok := strings.Cut(step, ":")
@@ -584,23 +596,61 @@ func (s *session) streamLib(ctx context.Context) {
 				continue
 			}
 			time.AfterFunc(d, func() {
-				if ctx.Err() == nil {
+				s.mu.Lock()
+				defer s.mu.Unlock()
+				if ctx.Err() == nil && s.enc != nil {
 					log.Printf("bitrate -> %d kbps", v)
-					enc.SetKbps(v)
+					s.enc.SetKbps(v)
 				}
 			})
 		}
 	}
+	defer func() { s.mu.Lock(); s.enc = nil; s.mu.Unlock() }()
+	rung := s.lad.Rung()
 	for ctx.Err() == nil {
-		if err := enc.Grab(); err != nil {
+		// One encoder per rung: a new picture size or frame rate needs a new
+		// capture and encoder (it starts with a keyframe carrying the new size).
+		s.mu.Lock()
+		videoKbps := s.videoKbps
+		s.mu.Unlock()
+		enc, err := avenc.New(*display, width, height, offX, offY, rung.W, rung.H, rung.FPS, videoKbps, "h264_nvenc")
+		if err != nil {
 			log.Printf("%v", err)
 			return
+		}
+		s.mu.Lock()
+		s.enc = enc
+		s.curFPS = rung.FPS
+		s.mu.Unlock()
+		log.Printf("encoding %s (captured %dx%d, scaled on the graphics card when smaller)", rung, width, height)
+		rung = s.encodeUntilRungChanges(ctx, enc)
+		s.mu.Lock()
+		s.enc = nil
+		s.mu.Unlock()
+		enc.Close()
+	}
+}
+
+// encodeUntilRungChanges captures and sends frames until the ladder picks
+// another rung (which it returns) or the session ends.
+func (s *session) encodeUntilRungChanges(ctx context.Context, enc *avenc.Encoder) ladder.Rung {
+	for ctx.Err() == nil {
+		select {
+		case r := <-s.rungCh:
+			return r
+		default:
+		}
+		if err := enc.Grab(); err != nil {
+			log.Printf("%v", err)
+			s.cancel()
+			break
 		}
 		capNs := mono.Now()
 		au, key, err := enc.Encode()
 		if err != nil {
 			log.Printf("%v", err)
-			return
+			s.cancel()
+			break
 		}
 		if au == nil {
 			continue
@@ -623,6 +673,7 @@ func (s *session) streamLib(ctx context.Context) {
 		}
 		s.send(au, key, capNs, encNs)
 	}
+	return s.lad.Rung()
 }
 
 func (s *session) streamFFmpeg(ctx context.Context) {
@@ -721,6 +772,17 @@ func (s *session) feedback(b []byte) {
 	}
 	deliveredKbps := float64(fb.Bytes) * 8 / (float64(fb.SpanNs) / 1e9) / 1000
 	s.rcvdBytes += fb.Bytes
+	s.pBusy = max(s.pBusy, fb.Busy)
+	s.pSkipped += fb.Skipped
+	if fb.DecodeUs > 0 {
+		s.pDecUs = fb.DecodeUs
+	}
+	if fb.HWPct >= 0 {
+		s.pHW = fb.HWPct
+	}
+	if fb.Width > 0 {
+		s.pW, s.pH = fb.Width, fb.Height
+	}
 	if !*auto || s.enc == nil || sentKbps == 0 {
 		return
 	}
@@ -730,6 +792,18 @@ func (s *session) feedback(b []byte) {
 		Link: s.linkForRate(fb)})
 	if changed {
 		log.Printf("auto-quality: %.1f -> %.1f Mbps: %s", float64(before)/1000, float64(s.ctl.Kbps())/1000, why)
+	}
+	if *useLadder && fb.Frames+fb.Skipped > 0 {
+		from := s.lad.Rung()
+		if moved, why := s.lad.Update(ladder.Input{At: time.Unix(0, now), Kbps: float64(s.ctl.Kbps()),
+			Busy: float64(fb.Busy) / 1000, DecodeMs: float64(fb.DecodeUs) / 1000, Skipped: fb.Skipped}); moved {
+			log.Printf("quality: %s -> %s: %s", from, s.lad.Rung(), why)
+			select { // the newest choice wins
+			case <-s.rungCh:
+			default:
+			}
+			s.rungCh <- s.lad.Rung()
+		}
 	}
 	// The controller sets the total; the encoder gets what's left after the
 	// recovery packets. Each change costs a keyframe (see avenc.SetKbps), so
@@ -826,13 +900,16 @@ func (s *session) report(ctx context.Context) {
 			"capture->encoded ms %s | input %d pkts, send->applied ms %s | PLI %d, keyframes %d | "+
 			"player reports %.1f%% loss (planning for %.1f%%), recovery packets +%.0f%% | "+
 			"rate %.1f Mbps, video %.1f | player behind ms %s | received %.0f%% of sent | "+
-			"link measured %.1f Mbps, pacing %.1f Mbps, frame sent over ms %s%s",
+			"link measured %.1f Mbps, pacing %.1f Mbps, frame sent over ms %s | "+
+			"player %dx%d, busy %d%%, decodes in %.1f ms (%d%% on its graphics card), skipped %d | encoding %s%s",
 			float64(s.frames)/secs, float64(s.bytes)*8/secs/1e6,
 			float64(s.bytes)/float64(max(s.frames, 1))/1024, float64(s.maxFrame)/1024,
 			s.encWait.String(), s.encTime.String(), s.inputs, s.inputLat.String(), s.plis, s.keys,
 			s.lossLast*100, s.lossEst*100, 100*float64(s.fecPkts)/float64(max(s.mediaPkts, 1)),
 			float64(s.ctl.Kbps())/1000, float64(s.videoKbps)/1000, s.behind.String(), 100*float64(s.rcvdBytes)/float64(max(1, s.sentBytes-s.logSent)),
-			s.pacer.Estimate()/1000, s.paceKbps/1000, s.spread.String(), s.simLine())
+			s.pacer.Estimate()/1000, s.paceKbps/1000, s.spread.String(),
+			s.pW, s.pH, s.pBusy/10, float64(s.pDecUs)/1000, s.pHW, s.pSkipped, s.lad.Rung(), s.simLine())
+		s.pBusy, s.pSkipped = 0, 0
 		s.spread.Reset()
 		s.rcvdBytes, s.logSent = 0, s.sentBytes
 		s.behind.Reset()

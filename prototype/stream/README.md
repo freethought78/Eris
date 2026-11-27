@@ -427,12 +427,77 @@ protect these links, but would cost every other link a softer or slightly
 later first second. These links are rare, and the loss is limited to the
 moment the player's window opens.
 
+## The first test between two homes, and what changed (2026-11-26)
+
+A friend played from his home on the Windows player (two runs of 2 minutes;
+round trip 52–59 ms, his controller presses reached the host in 26–35 ms,
+almost nothing lost). It was unplayable: the delay grew by about 0.2 s every
+second, to 7 s in the first run and 16 s in the second. His PC decoded only
+about 50 fps of the 60 being sent, and the player queued the rest (a
+16-frame decode queue, then packets behind it). Auto-quality then read the
+growing delay as a congested network and cut the bitrate to its 1.5 Mbps
+floor, which blurred the picture without helping. Bitrate was the wrong
+control for a player that can't keep up. (The host also had a Discord screen
+share running in the first run; capture took 48 ms with it, 23.5 ms without.)
+
+Changes:
+
+- **Packets are timed when they arrive**, not when their frame is put
+  together, so a busy player can't pass for a slow network.
+- **The decode queue holds two frames.** When it's full, the player throws
+  away what's queued and waits for a keyframe, asking for one every 300 ms
+  until it comes: a moment's glitch instead of growing delay. It's a safety
+  net; the ladder is what stops it happening again.
+- **The player reports its load** ten times a second: how busy decoding and
+  drawing keep it, the median decode time, frames it skipped to catch up, and
+  what share of frames the graphics card really decoded. A hardware decoder
+  that's set up can still fall back to software without saying so: in the
+  bottle, Direct3D 11 decoding reported itself on, and decoded 0% of frames.
+  The summary now shows all of this.
+- **The quality ladder** (package `ladder`, DESIGN.md 5.1) steps resolution
+  and frame rate: 1440p, 1080p, 900p and 720p at 60 fps, then 720p at 45 and
+  30, then 540p at 30. Down when the player is over 85% busy for a second
+  (straight to a rung it should manage at about 60%: work scales with pixels
+  per second) or when the bitrate is under 0.03 bits per pixel for 2 s (to
+  the biggest rung with at least 0.045); up after 5 s with room to spare and
+  a hold that doubles when a step up has to be undone. The first 2 s are
+  ignored (the decoder warms up). Each rung change reopens capture and
+  encoder; smaller pictures are scaled on the graphics card
+  (`hwupload_cuda`, `scale_cuda`) and handed to NVENC there.
+- **Frames are encoded in 4 slices** (`ERIS_SLICES`), so a software decoder
+  can use several cores without delay. FFmpeg's software decoder gained
+  little from it here (10.0 to 9.6 ms a frame at 1440p); it costs almost
+  nothing, so it stays.
+- **The timestamp barcode is read at any scale**, so delays are still
+  measured once the picture is smaller.
+- New test options: `ptrecv -slow-decode 20ms` (a slower PC: each full-size
+  frame takes at least that long to decode, less for smaller pictures);
+  `ptsend -ladder=false`.
+
+Results (same PC, `PATTERN=shapes NOISE=128`, `delay=15ms` each way, 30 s):
+
+| Case | Ladder went to | Shown | Screen to screen, median |
+|---|---|---|---|
+| Clean | stayed at 1440p60 | 60 fps | 47 ms |
+| Player taking 20 ms a 1440p frame (like the friend's) | 900p60 | 58.5 fps | 39 ms |
+| Player taking 45 ms a 1440p frame | 720p at 45 fps | 44 fps | 43 ms |
+| Before the ladder: player at 20 ms a frame, safety net only | (none) | 15.5 fps, 373 ms stalls | 73 ms |
+| 3 Mbps link | 720p at 30 fps, 1.6 Mbps | 31 fps | 57 ms |
+| 8 Mbps link | 1080p60, 5.4 Mbps | 60 fps | 47 ms |
+| Link drops to 5 Mbps, recovers after 20 s (60 s) | 720p60, then back up through 900p and 1080p to 1440p | 58 fps | 49 ms |
+| 6 Mbps link that cuts bursts | 900p60 with pacing | 60 fps | 45 ms |
+| 1% loss, Wi-Fi stalls | stayed at 1440p60 | 58–60 fps | 58 ms |
+| Windows player in the bottle, 20 ms a frame | 900p60 | 60 fps | 15 ms |
+
 ## Next
 
-1. A run on the real monitors with a game (`run-real.sh`). Also checks
-   whether NVENC follows the bitrate on real game content.
-2. A run with a player on another machine (`run-host.sh`), against
-   ft party play's baseline; a Windows player can use `dist/windows/`.
+1. The minimal Eris app and server, so tests between homes run the normal way
+   with results collected automatically and live updates (DESIGN.md section 6,
+   "Order, revised"). Remote tests wait for it.
+2. A run on the real monitors with a game (`run-real.sh`). Also checks
+   whether NVENC follows the bitrate on real game content, and whether
+   capturing the desktop slows the host's own picture (the host saw its own
+   controller input lag during the test between two homes).
 3. Windows host: `ddagrab` capture, ViGEm controller (needs real Windows:
    Wine has neither).
 4. Showing frames straight from the graphics card instead of copying them back

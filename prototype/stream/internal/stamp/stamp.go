@@ -28,22 +28,29 @@ func Encode(nowNs int64) uint32 {
 
 // Decode reads the barcode from the luma plane of a frame. ok is false when the
 // checksum doesn't match (barcode not visible, or damaged by packet loss).
-func Decode(y []byte, stride int) (v uint32, ok bool) {
-	if len(y) < Block*stride {
+func Decode(y []byte, stride int) (v uint32, ok bool) { return DecodeScaled(y, stride, 1) }
+
+// DecodeScaled reads the barcode from a picture scaled by scale (0.5 for a
+// 1280-wide picture of a 2560-wide screen: the quality ladder).
+func DecodeScaled(y []byte, stride int, scale float64) (v uint32, ok bool) {
+	block := float64(Block) * scale
+	if block < 6 || len(y) < int(block)*stride || float64(Bits)*block > float64(stride) {
 		return 0, false
 	}
+	r := max(1, int(block/4)) // sample the middle half of each block
 	var w uint32
 	for i := 0; i < Bits; i++ {
-		cx, cy := i*Block+Block/2, Block/2
-		sum := 0
-		for dy := -4; dy < 4; dy++ {
+		cx, cy := int((float64(i)+0.5)*block), int(block/2)
+		sum, n := 0, 0
+		for dy := -r; dy < r; dy++ {
 			row := (cy + dy) * stride
-			for dx := -4; dx < 4; dx++ {
+			for dx := -r; dx < r; dx++ {
 				sum += int(y[row+cx+dx])
+				n++
 			}
 		}
 		w <<= 1
-		if sum/64 > 128 {
+		if sum/n > 128 {
 			w |= 1
 		}
 	}

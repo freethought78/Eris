@@ -66,6 +66,7 @@ var (
 	recov    = flag.String("recover", "refresh", "after a lost frame: refresh = let intra refresh repair the picture over a second; key = ask the host for a keyframe")
 	iceDebug = flag.Bool("debug-ice", false, "log the WebRTC library's connection setup in detail")
 	logFile  = flag.String("log", "", "also write everything printed to this file (on Windows, where a console can close before it's read)")
+	slowDec  = flag.Duration("slow-decode", 0, "for testing: make decoding a full-size frame take at least this long, as on a slow PC (less for smaller pictures)")
 	skew     = flag.Duration("clock-skew", 0, "for testing: run this program's clock this far off the host's, as if on another machine")
 	netSim   = flag.String("net", "", "simulate a bad network for what the player sends, e.g. delay=20ms,loss=1% (see netsim)")
 )
@@ -78,6 +79,7 @@ type meta struct{ cap, enc, rx int64 }
 
 type frame struct {
 	data              []byte
+	w, h              int   // picture size (the host steps resolution up and down)
 	cap, enc, rx, dec int64 // cap and enc are host clock; rx and dec this program's
 	off               int64 // host clock minus ours, when it was decoded
 	stampV            uint32
@@ -90,11 +92,26 @@ type receiver struct {
 	pc   *webrtc.PeerConnection
 	ssrc uint32
 
-	// keyframe requests; reader goroutine only
+	// keyframe requests (lastKeyReq, keyReqs guarded by mu)
 	lastKeyReq int64
 	keyReqs    int
-	pictures   bool // the decoder has produced a picture
-	noPicture  int  // frames in a row that gave no picture
+	pictures   bool // the decoder has produced a picture; decode goroutine only
+	noPicture  int  // frames in a row that gave no picture; decode goroutine only
+
+	// Catching up when decoding falls behind (assembler goroutine only, but
+	// counters guarded by mu): see assemble.
+	skipToKey bool
+	catchUps  int // times the queue was thrown away
+	skipped   int // frames thrown away (in total)
+	fbSkipped int // ... since the last report
+
+	// Player load, guarded by mu: time spent decoding and drawing.
+	decBusy, drawBusy  int64        // ns since the last report
+	decTimes           []int64      // this report's per-frame decode times
+	decAll, drawAll    stats.Series // whole run
+	hwFrames, swFrames int64        // decoded by the graphics card, and in software
+	fbHW, fbSW         int64        // ... at the last report
+	picW, picH         int          // size of the latest picture
 
 	dec    io.WriteCloser // -decoder ffmpeg
 	lib    *avdec.Decoder // -decoder lib
@@ -299,7 +316,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("texture: %v", err)
 	}
-	defer tex.Destroy()
+	texW, texH := r.w, r.h
+	defer func() { tex.Destroy() }()
 
 	var st pad.State
 	send := func() {
@@ -315,7 +333,6 @@ func main() {
 	start := time.Now()
 	summaryFrom := mono.Now() + int64(*warmup)*int64(time.Second)
 	lastReport, lastBeat, lastFake := start, start, start
-	ySize := r.w * r.h
 
 	for running := true; running; {
 		for ev := sdl.WaitEventTimeout(1); ev != nil; ev = sdl.PollEvent() {
@@ -355,10 +372,24 @@ func main() {
 			}
 		}
 		if latest != nil {
-			_ = tex.UpdateNV(nil, latest.data[:ySize], r.w, latest.data[ySize:], r.w)
+			drawStart := mono.Now()
+			if latest.w != texW || latest.h != texH { // the host changed resolution
+				tex.Destroy()
+				if tex, err = ren.CreateTexture(pixelFormatNV12, sdl.TEXTUREACCESS_STREAMING, int32(latest.w), int32(latest.h)); err != nil {
+					log.Fatalf("texture: %v", err)
+				}
+				texW, texH = latest.w, latest.h
+				logf("picture now %dx%d", texW, texH)
+			}
+			ySize := latest.w * latest.h
+			_ = tex.UpdateNV(nil, latest.data[:ySize], latest.w, latest.data[ySize:ySize*3/2], latest.w)
 			_ = ren.Copy(tex, nil, nil)
 			ren.Present()
 			shown := mono.Now()
+			r.mu.Lock()
+			r.drawBusy += shown - drawStart
+			r.drawAll.AddNs(shown - drawStart)
+			r.mu.Unlock()
 			inSummary := time.Since(start) >= time.Duration(*warmup)*time.Second
 			for _, rr := range []*run{&window, &all} {
 				if rr == &all && !inSummary {
@@ -407,6 +438,13 @@ func main() {
 	secs := time.Since(start).Seconds() - float64(*warmup)
 	fmt.Fprintln(out)
 	printRun(fmt.Sprintf("SUMMARY (%.0f s after %d s warm-up)", secs, *warmup), &all, secs, r)
+	r.mu.Lock()
+	fmt.Fprintf(out, "  player load: decoding a frame        %s ms; drawing %s ms\n", r.decAll.String(), r.drawAll.String())
+	if n := r.hwFrames + r.swFrames; n > 0 {
+		fmt.Fprintf(out, "  decoded on the graphics card         %d%% of %d frames\n", 100*r.hwFrames/n, n)
+	}
+	fmt.Fprintf(out, "  fell behind and caught up            %d times (%d frames skipped)\n", r.catchUps, r.skipped)
+	r.mu.Unlock()
 	if best, med, ok := clk.RoundTrip(); ok {
 		off, _ := clk.Offset()
 		fmt.Fprintf(out, "  network round trip (clock pings)     best %.1f, median %.1f ms; host clock minus ours %.3f s\n",
@@ -570,6 +608,7 @@ func negotiate(pc *webrtc.PeerConnection) (*sig.Answer, error) {
 type rxPacket struct {
 	p   *rtp.Packet
 	fec bool
+	at  time.Time // when it arrived: a busy player mustn't pass for a slow network
 }
 
 // readTrack passes one stream's packets to the assembler goroutine.
@@ -590,7 +629,7 @@ func (r *receiver) readTrack(t *webrtc.TrackRemote, isFEC bool) {
 			r.train.Packet(p.Timestamp, len(p.Payload)+12, time.Unix(0, now))
 		}
 		r.mu.Unlock()
-		r.rx <- rxPacket{p, isFEC}
+		r.rx <- rxPacket{p, isFEC, time.Now()}
 	}
 }
 
@@ -598,8 +637,14 @@ func (r *receiver) readTrack(t *webrtc.TrackRemote, isFEC bool) {
 // deliberately no jitter buffer and no waiting for re-sends (DESIGN.md 5.6).
 func (r *receiver) assemble() {
 	// Decoding runs on its own goroutine, so packets keep being read while a
-	// frame decodes, and grace times aren't eaten by decoding.
-	work := make(chan decodeItem, 16)
+	// frame decodes, and grace times aren't eaten by decoding. Its queue holds
+	// two frames: a player that can't keep up must never fall further and
+	// further behind (in the first test between two homes, a player decoding
+	// 50 fps of a 60 fps stream fell 16 s behind). When it's full, what's
+	// queued is thrown away and the next keyframe starts afresh: a moment's
+	// glitch instead of growing delay. The host is told (Feedback.Skipped and
+	// Busy) and makes the stream lighter.
+	work := make(chan decodeItem, 2)
 	go func() {
 		for it := range work {
 			if it.lost {
@@ -610,27 +655,67 @@ func (r *receiver) assemble() {
 		}
 	}()
 	r.asm = &assemble.Assembler{
-		Deliver: func(pkts []*rtp.Packet, rebuilt bool, waited time.Duration) {
+		Deliver: func(pkts []*rtp.Packet, rebuilt bool, waited time.Duration, at time.Time) {
 			r.mu.Lock()
 			if rebuilt {
 				r.rebuildWait.AddNs(int64(waited))
 			}
 			r.mu.Unlock()
-			work <- decodeItem{pkts: pkts, rx: mono.Now()}
+			if r.skipToKey {
+				if !hasIDR(pkts) {
+					r.countSkip(1)
+					// Keep asking while waiting: one request can be lost, or
+					// fall inside the limit on how often to ask.
+					r.askKeyframeEvery(300 * time.Millisecond)
+					return
+				}
+				r.skipToKey = false
+			}
+			// When the frame was complete, from the arrival of its last packet.
+			rx := mono.Now() - int64(time.Since(at))
+			select {
+			case work <- decodeItem{pkts: pkts, rx: rx}:
+			default:
+				// Decoding is behind: throw the queue away and start again from
+				// the next keyframe.
+				n := 1
+				for drained := false; !drained; {
+					select {
+					case it := <-work:
+						if !it.lost {
+							n++
+						}
+					default:
+						drained = true
+					}
+				}
+				r.countSkip(n)
+				r.mu.Lock()
+				r.catchUps++
+				r.mu.Unlock()
+				r.skipToKey = true
+				r.askKeyframeEvery(0)
+			}
 		},
 		Lost: func() {
 			r.mu.Lock()
 			r.dropped++
 			r.fbLost++
 			r.mu.Unlock()
-			work <- decodeItem{lost: true}
+			if r.skipToKey {
+				return
+			}
+			select {
+			case work <- decodeItem{lost: true}:
+			default: // the next frame will find the queue full and catch up
+			}
 		},
 	}
 	feed := func(x rxPacket) {
 		if x.fec {
-			r.asm.FEC(x.p, time.Now())
+			r.asm.FEC(x.p, x.at)
 		} else {
-			r.asm.Media(x.p, time.Now())
+			r.asm.Media(x.p, x.at)
 		}
 	}
 	t := time.NewTimer(time.Hour)
@@ -680,15 +765,55 @@ func (r *receiver) lost() {
 	}
 }
 
+func (r *receiver) countSkip(n int) {
+	r.mu.Lock()
+	r.skipped += n
+	r.fbSkipped += n
+	r.mu.Unlock()
+}
+
+// hasIDR says whether a frame's packets carry a keyframe (an IDR picture),
+// whole or as the first piece of one.
+func hasIDR(pkts []*rtp.Packet) bool {
+	for _, p := range pkts {
+		b := p.Payload
+		if len(b) < 2 {
+			continue
+		}
+		switch b[0] & 0x1f {
+		case nal.TypeIDR:
+			return true
+		case 28: // FU-A: one NAL in pieces; the second byte says which
+			if b[1]&0x1f == nal.TypeIDR {
+				return true
+			}
+		case 24: // STAP-A: several NALs, each after a 2-byte size
+			for i := 1; i+2 < len(b); {
+				n := int(b[i])<<8 | int(b[i+1])
+				if b[i+2]&0x1f == nal.TypeIDR {
+					return true
+				}
+				i += 2 + n
+			}
+		}
+	}
+	return false
+}
+
 // askKeyframe asks the host for a keyframe, at most every 500 ms (the
 // keyframe itself takes a while to arrive, and asking again won't speed it up).
-func (r *receiver) askKeyframe() {
+// Called from the assembler and decode goroutines.
+func (r *receiver) askKeyframe() { r.askKeyframeEvery(500 * time.Millisecond) }
+
+// askKeyframeEvery asks for a keyframe unless one was asked for within gap.
+func (r *receiver) askKeyframeEvery(gap time.Duration) {
 	now := mono.Now()
-	if now-r.lastKeyReq < 500*int64(time.Millisecond) {
+	r.mu.Lock()
+	if now-r.lastKeyReq < int64(gap) {
+		r.mu.Unlock()
 		return
 	}
 	r.lastKeyReq = now
-	r.mu.Lock()
 	r.keyReqs++
 	r.mu.Unlock()
 	_ = r.pc.WriteRTCP([]rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: r.ssrc}})
@@ -716,6 +841,21 @@ func (r *receiver) report(dc *webrtc.DataChannel) {
 			r.sentEarly, r.sentLate = e, l
 		}
 		r.maxGap = 0
+		span := now - last
+		if span > 0 {
+			fb.Busy = int(1000 * max(r.decBusy, r.drawBusy) / span)
+		}
+		if len(r.decTimes) > 0 {
+			sort.Slice(r.decTimes, func(i, j int) bool { return r.decTimes[i] < r.decTimes[j] })
+			fb.DecodeUs = r.decTimes[len(r.decTimes)/2] / 1000
+		}
+		fb.HWPct = -1
+		if n := (r.hwFrames - r.fbHW) + (r.swFrames - r.fbSW); n > 0 {
+			fb.HWPct = int(100 * (r.hwFrames - r.fbHW) / n)
+		}
+		fb.Skipped, fb.Width, fb.Height = r.fbSkipped, r.picW, r.picH
+		r.decBusy, r.drawBusy, r.decTimes, r.fbSkipped = 0, 0, r.decTimes[:0], 0
+		r.fbHW, r.fbSW = r.hwFrames, r.swFrames
 		if len(r.fbDelays) > 0 {
 			sort.Slice(r.fbDelays, func(i, j int) bool { return r.fbDelays[i] < r.fbDelays[j] })
 			fb.BehindNs = r.fbDelays[len(r.fbDelays)/2] - r.bestDelay
@@ -735,6 +875,26 @@ func (r *receiver) report(dc *webrtc.DataChannel) {
 }
 
 func (r *receiver) frameReady(pkts []*rtp.Packet, rx int64) {
+	began := mono.Now()
+	defer func() {
+		if *slowDec > 0 { // testing: a slower PC, whose cost grows with the picture
+			r.mu.Lock()
+			share := 1.0
+			if r.picW > 0 {
+				share = float64(r.picW*r.picH) / float64(r.w*r.h)
+			}
+			r.mu.Unlock()
+			if left := began + int64(float64(*slowDec)*share) - mono.Now(); left > 0 {
+				time.Sleep(time.Duration(left))
+			}
+		}
+		d := mono.Now() - began
+		r.mu.Lock()
+		r.decBusy += d
+		r.decTimes = append(r.decTimes, d)
+		r.decAll.AddNs(d)
+		r.mu.Unlock()
+	}()
 	var h codecs.H264Packet
 	var annexB []byte
 	for _, p := range pkts {
@@ -788,7 +948,14 @@ func (r *receiver) frameReady(pkts []*rtp.Packet, rx int64) {
 		r.rxFrames++
 		r.mu.Unlock()
 		f := <-r.pool
-		ok, err := r.lib.Decode(out, f.data, r.w, r.h)
+		pw, ph, ok, err := r.lib.Decode(out, f.data)
+		f.w, f.h = pw, ph
+		r.mu.Lock()
+		r.hwFrames, r.swFrames = r.lib.HWFrames, r.lib.SWFrames
+		if ok {
+			r.picW, r.picH = pw, ph
+		}
+		r.mu.Unlock()
 		if err != nil {
 			logf("%v", err)
 		}
@@ -895,7 +1062,10 @@ func (r *receiver) readDecoded(out io.Reader) {
 func (r *receiver) deliver(f *frame) {
 	f.dec = mono.Now()
 	f.off = hostOffset()
-	f.stampV, f.stampOK = stamp.Decode(f.data[:r.w*r.h], r.w)
+	if f.w == 0 { // the ffmpeg-program decoder: always the stream's size
+		f.w, f.h = r.w, r.h
+	}
+	f.stampV, f.stampOK = stamp.DecodeScaled(f.data[:f.w*f.h], f.w, float64(f.w)/float64(r.w))
 
 	cp := *f // keep timing for stats; the pixels go back to the pool
 	cp.data = nil

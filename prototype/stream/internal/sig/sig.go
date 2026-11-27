@@ -206,4 +206,11 @@ type Feedback struct {
 	LinkKbps int64  `json:"link"`   // link speed read off how spread out frames arrive (package pace); 0 = unknown
 	EarlyN   int64  `json:"early"`  // lost video packets in the first half of their frames (pace.Tail)
 	LateN    int64  `json:"late"`   // ...and in the second half
+	// The player's own load, so a slow player isn't mistaken for a slow network.
+	DecodeUs int64 `json:"dec"`     // median time to decode a frame
+	Busy     int   `json:"busy"`    // per mille of the time decoding or drawing kept it busy (the busier of the two)
+	Skipped  int   `json:"skipped"` // frames thrown away to catch up after decoding fell behind
+	HWPct    int   `json:"hw"`      // share of frames the graphics card decoded, percent (-1 = none decoded)
+	Width    int   `json:"w"`       // size of the pictures it's getting
+	Height   int   `json:"h"`
 }

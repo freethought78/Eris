@@ -43,3 +43,32 @@ func TestAgeWrap(t *testing.T) {
 		t.Fatalf("age across wrap = %d, want %d", got, 11*Unit)
 	}
 }
+
+func TestDecodeScaled(t *testing.T) {
+	// Draw a barcode at full size, shrink it by half (box filter), read it back.
+	const w, h = Bits * Block, Block
+	full := make([]byte, w*h)
+	v := Encode(123456789)
+	for i := 0; i < Bits; i++ {
+		on := v&(1<<(Bits-1-i)) != 0
+		for y := 0; y < h; y++ {
+			for x := i * Block; x < (i+1)*Block; x++ {
+				if on {
+					full[y*w+x] = 235
+				} else {
+					full[y*w+x] = 16
+				}
+			}
+		}
+	}
+	half := make([]byte, (w/2)*(h/2))
+	for y := 0; y < h/2; y++ {
+		for x := 0; x < w/2; x++ {
+			half[y*(w/2)+x] = byte((int(full[2*y*w+2*x]) + int(full[2*y*w+2*x+1]) + int(full[(2*y+1)*w+2*x]) + int(full[(2*y+1)*w+2*x+1])) / 4)
+		}
+	}
+	got, ok := DecodeScaled(half, w/2, 0.5)
+	if !ok || got != v>>8 {
+		t.Fatalf("got %x %v, want %x", got, ok, v>>8)
+	}
+}

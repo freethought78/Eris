@@ -26,7 +26,11 @@ static int eris_open(AVCodecContext **out, const char *hw) {
 	AVCodecContext *c = avcodec_alloc_context3(codec);
 	if (!c) return AVERROR(ENOMEM);
 	c->flags |= AV_CODEC_FLAG_LOW_DELAY; // output each frame immediately
-	c->thread_count = 1;                 // frame threads would hold frames back
+	// Slice threads only: decoding several frames at once would hold frames
+	// back. They help when the host splits frames into slices (it does) and
+	// decoding falls back to software; hardware decoding ignores them.
+	c->thread_type = FF_THREAD_SLICE;
+	c->thread_count = 0; // one per core
 
 	enum AVHWDeviceType type = hw && *hw ? av_hwdevice_find_type_by_name(hw) : AV_HWDEVICE_TYPE_NONE;
 	if (type != AV_HWDEVICE_TYPE_NONE) {
@@ -60,13 +64,15 @@ static int eris_send(AVCodecContext *c, AVPacket *pkt, const uint8_t *data, int 
 	return err;
 }
 
-// Returns 1 with a frame in sw (NV12 or YUV420P), 0 when no frame is ready, <0 on error.
-static int eris_receive(AVCodecContext *c, AVFrame *f, AVFrame *sw) {
+// Returns 1 with a frame in sw (NV12 or YUV420P), 0 when no frame is ready,
+// <0 on error. *hw says whether the graphics card decoded it.
+static int eris_receive(AVCodecContext *c, AVFrame *f, AVFrame *sw, int *hw) {
 	int err = avcodec_receive_frame(c, f);
 	if (err == AVERROR(EAGAIN) || err == AVERROR_EOF) return 0;
 	if (err < 0) return err;
 	av_frame_unref(sw);
-	if (f->format == eris_hw_fmt) {
+	*hw = f->format == eris_hw_fmt && eris_hw_fmt != AV_PIX_FMT_NONE;
+	if (*hw) {
 		err = av_hwframe_transfer_data(sw, f, 0); // graphics card -> memory, as NV12
 		av_frame_unref(f);
 		if (err < 0) return err;
@@ -96,7 +102,10 @@ type Decoder struct {
 	pkt      *C.AVPacket
 	frame    *C.AVFrame
 	sw       *C.AVFrame
-	Hardware bool
+	Hardware bool // a hardware decoder was set up; see HWFrames for whether it's used
+	// Pictures the graphics card decoded, and ones decoded in software (a
+	// hardware decoder that was set up can still fall back, quietly).
+	HWFrames, SWFrames int64
 }
 
 func averr(code C.int) error {
@@ -121,29 +130,37 @@ func New(hw string) (*Decoder, error) {
 }
 
 // Decode decodes one complete frame (Annex-B access unit) and writes the
-// picture as NV12 with stride w into dst (len w*h*3/2). It returns false when
-// the decoder produced no picture (for example, before the first keyframe).
-func (d *Decoder) Decode(au []byte, dst []byte, w, h int) (bool, error) {
+// picture as NV12 into dst, packed (stride = its width). The picture may be
+// any size up to dst's (the host changes resolution as quality steps up and
+// down); w and h say what it was. ok is false when the decoder produced no
+// picture (for example, before the first keyframe).
+func (d *Decoder) Decode(au []byte, dst []byte) (w, h int, ok bool, err error) {
 	if len(au) == 0 {
-		return false, nil
+		return 0, 0, false, nil
 	}
-	if err := C.eris_send(d.ctx, d.pkt, (*C.uint8_t)(unsafe.Pointer(&au[0])), C.int(len(au))); err < 0 {
-		return false, fmt.Errorf("decode: %w", averr(err))
+	if e := C.eris_send(d.ctx, d.pkt, (*C.uint8_t)(unsafe.Pointer(&au[0])), C.int(len(au))); e < 0 {
+		return 0, 0, false, fmt.Errorf("decode: %w", averr(e))
 	}
-	got := false
 	for {
-		r := C.eris_receive(d.ctx, d.frame, d.sw)
+		var hw C.int
+		r := C.eris_receive(d.ctx, d.frame, d.sw, &hw)
 		if r < 0 {
-			return got, fmt.Errorf("decode: %w", averr(r))
+			return w, h, ok, fmt.Errorf("decode: %w", averr(r))
 		}
 		if r == 0 {
-			return got, nil
+			return w, h, ok, nil
 		}
-		if int(d.sw.width) != w || int(d.sw.height) != h {
-			return got, fmt.Errorf("decode: picture is %dx%d, expected %dx%d", d.sw.width, d.sw.height, w, h)
+		if hw != 0 {
+			d.HWFrames++
+		} else {
+			d.SWFrames++
 		}
-		d.copyNV12(dst, w, h)
-		got = true
+		pw, ph := int(d.sw.width), int(d.sw.height)
+		if pw*ph*3/2 > len(dst) {
+			return w, h, ok, fmt.Errorf("decode: picture is %dx%d, larger than the stream's", pw, ph)
+		}
+		d.copyNV12(dst, pw, ph)
+		w, h, ok = pw, ph, true
 	}
 }
 

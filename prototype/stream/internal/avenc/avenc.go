@@ -1,17 +1,24 @@
 // Package avenc captures the screen and hardware-encodes it inside the
 // program with FFmpeg's libraries: x11grab for capture, NVENC for encoding.
 // Unlike the ffmpeg program, it can change the bitrate between frames and
-// make a keyframe on request.
+// make a keyframe on request. When the output is smaller than the capture
+// (the quality ladder), the picture is uploaded to the graphics card and
+// scaled there (hwupload_cuda, scale_cuda) before NVENC, so a smaller picture
+// costs no extra copying or CPU time.
 package avenc
 
 /*
-#cgo pkg-config: libavdevice libavformat libavcodec libavutil
+#cgo pkg-config: libavdevice libavformat libavfilter libavcodec libavutil
 #include <stdlib.h>
 #include <libavdevice/avdevice.h>
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/opt.h>
+#include <libavutil/hwcontext.h>
+#include <libavfilter/avfilter.h>
+#include <libavfilter/buffersrc.h>
+#include <libavfilter/buffersink.h>
 
 typedef struct {
 	AVFormatContext *in;
@@ -21,7 +28,36 @@ typedef struct {
 	AVFrame *frame;
 	int64_t n;
 	int want_key;
+	// Scaling on the graphics card (only when the output is smaller).
+	AVBufferRef *dev;
+	AVFilterGraph *graph;
+	AVFilterContext *src, *sink;
+	AVFrame *scaled;
 } eris_enc;
+
+// Builds capture (bgr0) -> hwupload_cuda -> scale_cuda=w:h -> sink.
+static int eris_open_scaler(eris_enc *e, int cw, int ch, int w, int h, int fps) {
+	int err = av_hwdevice_ctx_create(&e->dev, AV_HWDEVICE_TYPE_CUDA, NULL, NULL, 0);
+	if (err < 0) return err;
+	e->graph = avfilter_graph_alloc();
+	if (!e->graph) return AVERROR(ENOMEM);
+	char args[256];
+	snprintf(args, sizeof args, "video_size=%dx%d:pix_fmt=%d:time_base=1/%d:pixel_aspect=1/1",
+	         cw, ch, e->in->streams[0]->codecpar->format, fps);
+	if ((err = avfilter_graph_create_filter(&e->src, avfilter_get_by_name("buffer"), "in", args, NULL, e->graph)) < 0) return err;
+	if ((err = avfilter_graph_create_filter(&e->sink, avfilter_get_by_name("buffersink"), "out", NULL, NULL, e->graph)) < 0) return err;
+	AVFilterContext *up, *scale;
+	if ((err = avfilter_graph_create_filter(&up, avfilter_get_by_name("hwupload_cuda"), "up", NULL, NULL, e->graph)) < 0) return err;
+	up->hw_device_ctx = av_buffer_ref(e->dev);
+	snprintf(args, sizeof args, "w=%d:h=%d", w, h);
+	if ((err = avfilter_graph_create_filter(&scale, avfilter_get_by_name("scale_cuda"), "scale", args, NULL, e->graph)) < 0) return err;
+	if ((err = avfilter_link(e->src, 0, up, 0)) < 0) return err;
+	if ((err = avfilter_link(up, 0, scale, 0)) < 0) return err;
+	if ((err = avfilter_link(scale, 0, e->sink, 0)) < 0) return err;
+	if ((err = avfilter_graph_config(e->graph, NULL)) < 0) return err;
+	e->scaled = av_frame_alloc();
+	return 0;
+}
 
 static void eris_verbose(void) { av_log_set_level(AV_LOG_VERBOSE); }
 
@@ -46,7 +82,13 @@ static int eris_open_encoder(eris_enc *e, const char *name, int w, int h, int fp
 	AVCodecContext *c = avcodec_alloc_context3(codec);
 	c->width = w;
 	c->height = h;
-	c->pix_fmt = eris_capture_format(e); // NVENC takes the captured BGR0 directly
+	if (e->sink) { // scaled on the graphics card: NVENC reads the CUDA frames there
+		c->pix_fmt = AV_PIX_FMT_CUDA;
+		c->sw_pix_fmt = eris_capture_format(e);
+		c->hw_frames_ctx = av_buffer_ref(av_buffersink_get_hw_frames_ctx(e->sink));
+	} else {
+		c->pix_fmt = eris_capture_format(e); // NVENC takes the captured BGR0 directly
+	}
 	c->time_base = (AVRational){1, fps};
 	c->framerate = (AVRational){fps, 1};
 	c->bit_rate = (int64_t)kbps * 1000;
@@ -54,6 +96,12 @@ static int eris_open_encoder(eris_enc *e, const char *name, int w, int h, int fp
 	c->rc_buffer_size = (int)(c->bit_rate / fps); // about one frame
 	c->gop_size = fps;                             // intra-refresh period
 	c->max_b_frames = 0;
+	// Each frame in slices (ERIS_SLICES, default 4), so a player that decodes
+	// in software can decode them on several cores at once, with no added
+	// delay (unlike decoding several frames at once). Costs a little
+	// compression.
+	const char *sl = getenv("ERIS_SLICES");
+	c->slices = sl ? atoi(sl) : 4;
 	AVDictionary *o = NULL;
 	av_dict_set(&o, "preset", "p1", 0);
 	av_dict_set(&o, "tune", "ull", 0);
@@ -82,16 +130,26 @@ static int eris_grab(eris_enc *e) {
 
 // Encodes the last grab. Returns 1 with a packet in e->out, 0 if the encoder
 // gave nothing yet, <0 on error.
-static int eris_encode(eris_enc *e) {
+static int eris_encode(eris_enc *e, int cw, int ch) {
 	AVFrame *f = e->frame;
 	AVCodecContext *c = e->enc;
 	av_frame_unref(f);
-	f->format = c->pix_fmt;
-	f->width = c->width;
-	f->height = c->height;
-	int err = av_image_fill_arrays(f->data, f->linesize, e->cap->data, c->pix_fmt, c->width, c->height, 1);
+	int capfmt = eris_capture_format(e);
+	f->format = capfmt;
+	f->width = cw;
+	f->height = ch;
+	int err = av_image_fill_arrays(f->data, f->linesize, e->cap->data, capfmt, cw, ch, 1);
 	if (err < 0) return err;
 	f->pts = e->n++;
+	if (e->sink) {
+		// The capture's own buffer, shared rather than copied, then up to the
+		// graphics card and scaled there.
+		f->buf[0] = av_buffer_ref(e->cap->buf);
+		if ((err = av_buffersrc_add_frame_flags(e->src, f, AV_BUFFERSRC_FLAG_KEEP_REF)) < 0) return err;
+		av_frame_unref(e->scaled);
+		if ((err = av_buffersink_get_frame(e->sink, e->scaled)) < 0) return err;
+		f = e->scaled;
+	}
 	if (e->want_key) { f->pict_type = AV_PICTURE_TYPE_I; e->want_key = 0; }
 	err = avcodec_send_frame(c, f);
 	if (err < 0) return err;
@@ -110,6 +168,9 @@ static void eris_set_kbps(eris_enc *e, int kbps, int fps) {
 
 static void eris_close(eris_enc *e) {
 	if (e->enc) avcodec_free_context(&e->enc);
+	if (e->graph) avfilter_graph_free(&e->graph);
+	if (e->scaled) av_frame_free(&e->scaled);
+	if (e->dev) av_buffer_unref(&e->dev);
 	if (e->in) avformat_close_input(&e->in);
 	av_packet_free(&e->cap);
 	av_packet_free(&e->out);
@@ -128,9 +189,11 @@ import (
 
 // Encoder captures and encodes one screen region.
 type Encoder struct {
-	e       *C.eris_enc
-	fps     int
-	pending atomic.Int64 // bitrate to apply before the next frame, 0 = none
+	e          *C.eris_enc
+	fps        int
+	capW, capH int          // the captured region
+	OutW, OutH int          // the encoded picture
+	pending    atomic.Int64 // bitrate to apply before the next frame, 0 = none
 }
 
 func averr(code C.int) error {
@@ -139,8 +202,13 @@ func averr(code C.int) error {
 	return errors.New(C.GoString(&buf[0]))
 }
 
-// New opens capture of display (":0") at the region and an encoder for it.
-func New(display string, w, h, x, y, fps, kbps int, encoder string) (*Encoder, error) {
+// New opens capture of display (":0") at the region (w x h at x,y) and an
+// encoder for it, encoding at outW x outH (scaled on the graphics card when
+// smaller; 0 = the region's size).
+func New(display string, w, h, x, y, outW, outH, fps, kbps int, encoder string) (*Encoder, error) {
+	if outW <= 0 || outH <= 0 {
+		outW, outH = w, h
+	}
 	if os.Getenv("ERIS_AVLOG") == "verbose" {
 		C.eris_verbose()
 	}
@@ -159,12 +227,19 @@ func New(display string, w, h, x, y, fps, kbps int, encoder string) (*Encoder, e
 		C.free(unsafe.Pointer(e))
 		return nil, fmt.Errorf("open capture: %w", averr(err))
 	}
-	if err := C.eris_open_encoder(e, name, C.int(w), C.int(h), C.int(fps), C.int(kbps)); err < 0 {
+	if outW != w || outH != h {
+		if err := C.eris_open_scaler(e, C.int(w), C.int(h), C.int(outW), C.int(outH), C.int(fps)); err < 0 {
+			C.eris_close(e)
+			C.free(unsafe.Pointer(e))
+			return nil, fmt.Errorf("scaling on the graphics card: %w", averr(err))
+		}
+	}
+	if err := C.eris_open_encoder(e, name, C.int(outW), C.int(outH), C.int(fps), C.int(kbps)); err < 0 {
 		C.eris_close(e)
 		C.free(unsafe.Pointer(e))
 		return nil, fmt.Errorf("open %s: %w", encoder, averr(err))
 	}
-	return &Encoder{e: e, fps: fps}, nil
+	return &Encoder{e: e, fps: fps, capW: w, capH: h, OutW: outW, OutH: outH}, nil
 }
 
 // Grab waits for the next captured screen.
@@ -181,7 +256,7 @@ func (enc *Encoder) Encode() (au []byte, key bool, err error) {
 	if k := enc.pending.Swap(0); k > 0 {
 		C.eris_set_kbps(enc.e, C.int(k), C.int(enc.fps))
 	}
-	r := C.eris_encode(enc.e)
+	r := C.eris_encode(enc.e, C.int(enc.capW), C.int(enc.capH))
 	if r < 0 {
 		return nil, false, fmt.Errorf("encode: %w", averr(r))
 	}

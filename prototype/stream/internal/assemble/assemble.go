@@ -40,8 +40,9 @@ type Counters struct {
 type Assembler struct {
 	// Deliver gets each complete frame's media packets in order. rebuilt is
 	// true if recovery packets filled a gap; waited is then how long after
-	// the frame's last media packet it was rebuilt.
-	Deliver func(pkts []*rtp.Packet, rebuilt bool, waited time.Duration)
+	// the frame's last media packet it was rebuilt. at is when the packet that
+	// completed it arrived (the time passed to Media or FEC).
+	Deliver func(pkts []*rtp.Packet, rebuilt bool, waited time.Duration, at time.Time)
 	// Lost is called for each frame given up on (or that never arrived).
 	Lost func()
 	Cnt  Counters
@@ -284,7 +285,7 @@ func (a *Assembler) process(now time.Time) {
 			if f.rebuilt {
 				waited = now.Sub(f.lastMedia)
 			}
-			a.Deliver(pkts, f.rebuilt, waited)
+			a.Deliver(pkts, f.rebuilt, waited, now)
 			continue
 		}
 		// Give up once the next frame is ready, or once every recovery
