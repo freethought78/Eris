@@ -10,6 +10,7 @@
   --good: #4ecca3;
   --warn: #f0a500;
   --border: #2a2a4a;
+  --focus: #5b7fe0; /* keyboard focus */
   --radius: 6px;
   --font: system-ui, -apple-system, sans-serif;
 }
@@ -32,3 +33,10 @@ input {
 h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 18px 0 8px; }
 .muted { color: var(--muted); }
 .error { color: var(--highlight); }
+
+/* Focus in Eris's colours (the system's own ring is yellow and white on
+   Windows). Text boxes and menus show it in their border while in use;
+   buttons and other controls get a ring only when reached by keyboard. */
+:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+input:focus, textarea:focus, select:focus { border-color: var(--focus) !important; outline: none; } /* over each page's own border */

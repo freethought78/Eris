@@ -397,30 +397,31 @@ class Voice {
     return this.volumes[id] ?? 1
   }
 
-  // listDevices: each device once. The system lists some twice or more:
-  // Windows adds "Default - X" and "Communications - X" entries for devices
-  // also listed as X, and PipeWire can list one device under several
-  // profiles with the same name. The default entry stays, named for what it
-  // is; the others are kept once per name.
+  // listDevices: each device once, as people know it. The system lists
+  // some twice or more: Windows adds "Default - X" and "Communications - X"
+  // entries for devices also listed as X, and PipeWire can list one device
+  // under several profiles with the same name. The default entry is named
+  // for the device it uses, and that device isn't listed again under it
+  // (picking the default uses it anyway). USB codes like "(1852:5110)" that
+  // Chromium adds to names are left out.
   async listDevices() {
+    const tidy = (l) => l.replace(/\s*\([0-9a-f]{4}:[0-9a-f]{4}\)\s*$/i, '').trim()
     const out = {}
     for (const kind of ['audioinput', 'audiooutput', 'videoinput']) {
       let list = []
       try {
         list = await Room.getLocalDevices(kind, true)
       } catch {}
-      const seen = new Set()
-      out[kind] = []
+      const def = list.find((d) => d.deviceId === 'default')
+      const defName = def ? tidy(def.label.replace(/^Default\s*-\s*/i, '')) : ''
+      const seen = new Set(def && defName && defName !== tidy(def.label) ? [defName] : [])
+      out[kind] = def ? [{ deviceId: 'default', label: defName && defName !== tidy(def.label) ? `System default: ${defName}` : 'System default' }] : []
       for (const d of list) {
-        if (d.deviceId === 'communications') continue
-        if (d.deviceId === 'default') {
-          const of = d.label.replace(/^Default\s*-\s*/i, '')
-          out[kind].push({ deviceId: 'default', label: of && of !== d.label ? `System default (${of})` : 'System default' })
-          continue
-        }
-        if (seen.has(d.label)) continue
-        seen.add(d.label)
-        out[kind].push({ deviceId: d.deviceId, label: d.label })
+        if (d.deviceId === 'default' || d.deviceId === 'communications') continue
+        const name = tidy(d.label)
+        if (seen.has(name) && d.deviceId !== this.devices[kind]) continue // (kept if picked by name before)
+        seen.add(name)
+        out[kind].push({ deviceId: d.deviceId, label: name })
       }
     }
     return out
