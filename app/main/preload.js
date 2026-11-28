@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('eris', {
     ipcRenderer.on('pick-share', h)
     return () => ipcRenderer.removeListener('pick-share', h)
   },
+  shareMainScreenNext: () => ipcRenderer.invoke('share-main-screen-next'),
   sharePicked: (n, id, audio) => ipcRenderer.invoke('share-picked', { n, id, audio }),
   startHelper: (role, opts) => ipcRenderer.invoke('helper-start', { role, opts }),
   stopHelper: (role) => ipcRenderer.invoke('helper-stop', role),

@@ -176,14 +176,6 @@ const terminals = [
   ['xterm', (cmd) => ['-T', 'Eris server', '-e', ...cmd]],
 ]
 
-function mullvadConnected() {
-  try {
-    return /^Connected/m.test(execFileSync('mullvad', ['status'], { encoding: 'utf8', timeout: 3000 }))
-  } catch {
-    return false
-  }
-}
-
 function which(name) {
   for (const dir of (process.env.PATH || '').split(path.delimiter)) {
     const p = path.join(dir, name)
@@ -208,9 +200,10 @@ async function start() {
   if (!fs.existsSync(exe)) return { ok: false, error: `The server program is missing (${exe}).` }
   saveSettings(s)
   fs.mkdirSync(s.data, { recursive: true })
-  // With Mullvad connected, the server (and its LiveKit) runs outside the VPN:
-  // otherwise its replies leave through the tunnel and nobody can reach it.
-  const outsideVPN = process.platform === 'linux' && mullvadConnected() ? ['mullvad-exclude'] : []
+  // With Mullvad installed, the server (and its LiveKit) always runs outside
+  // the VPN, whether it's connected now or later: otherwise its replies leave
+  // through the tunnel and nobody can reach it.
+  const outsideVPN = process.platform === 'linux' && which('mullvad-exclude') ? ['mullvad-exclude'] : []
   const cmd = [...outsideVPN, exe, '-data', s.data, '-addr', s.addr, ...(s.public ? ['-public', s.public] : []), ...(s.media_port ? ['-media-port', String(s.media_port)] : [])]
   // Not ours to keep: the window's process lives on after the app closes.
   const env = { ...process.env }

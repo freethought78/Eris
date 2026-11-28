@@ -3,7 +3,9 @@
 // frame over WebRTC the moment it's encoded, and applies the player's
 // controller input to a virtual Xbox 360 pad.
 //
-// One player at a time. The player connects by POSTing a WebRTC offer to /offer.
+// With the Eris app (-signal stdio): up to -players players at once, each
+// with their own stream and controller. On its own (-signal http): one
+// player, who connects by POSTing a WebRTC offer to /offer.
 package main
 
 import (
@@ -48,29 +50,32 @@ import (
 )
 
 var (
-	listen    = flag.String("listen", "127.0.0.1:7400", "address for the player to connect to")
-	display   = flag.String("display", os.Getenv("DISPLAY"), "X display to capture")
-	region    = flag.String("region", "2560x1440+0+0", "capture region WxH+X+Y")
-	fps       = flag.Int("fps", 60, "capture frame rate")
-	kbps      = flag.Int("kbps", 12000, "starting bitrate, and the most auto-quality goes to unless -max-kbps")
-	auto      = flag.Bool("auto", true, "auto-quality: follow what the player's connection carries")
-	minKbps   = flag.Int("min-kbps", 1500, "auto-quality's lowest bitrate (video and recovery packets)")
-	maxKbps   = flag.Int("max-kbps", 0, "auto-quality's highest bitrate (0 = -kbps)")
-	target    = flag.Duration("target", 15*time.Millisecond, "auto-quality: how far frames may queue behind their best delay")
-	encoder   = flag.String("encoder", "nvenc", "nvenc or x264")
-	usePad    = flag.Bool("pad", false, "plug in a virtual controller and apply the player's input")
-	stun      = flag.String("stun", "", "optional STUN server, e.g. stun:stun.l.google.com:19302")
-	netSim    = flag.String("net", "", "simulate a bad network for what the host sends, e.g. delay=20ms,jitter=5ms,loss=1%,burst=2,kbps=20000 (see netsim)")
-	kbpsAt    = flag.String("kbps-at", "", "for testing the encoder: change the bitrate at set times, e.g. 5s:4000,10s:12000")
-	useLadder = flag.Bool("ladder", true, "step resolution and frame rate down for a struggling player or link, and back up (package ladder)")
-	paceMode  = flag.String("pace", "auto", "spread each frame's packets just above the player's measured link speed: auto (once the link is seen dropping bursts), on, or off")
-	fecMode   = flag.String("fec", "auto", "recovery packets: auto (follow the player's reported loss), off, or a fixed percentage such as 20")
-	udpPort   = flag.Int("udp-port", 0, "carry all WebRTC traffic on this one UDP port, for forwarding on the router (0 = any)")
-	public    = flag.String("public", "", "this machine's internet address (IP or name, e.g. a dynamic DNS name), offered to the player")
-	iface     = flag.String("iface", "", "use only this network interface (default: all but Docker, VPN and bridge ones)")
-	token     = flag.String("token", "", "secret the player must give; made up and printed if empty and -listen isn't loopback")
-	signal    = flag.String("signal", "http", "how players reach us: http (-listen) or stdio (JSON lines from the Eris app: offers in, answers and summaries out)")
-	pipe      = flag.String("pipeline", "lib", "lib: capture and encode with FFmpeg's libraries in this program (NVENC only); ffmpeg: run the ffmpeg program (for comparison)")
+	listen     = flag.String("listen", "127.0.0.1:7400", "address for the player to connect to")
+	display    = flag.String("display", os.Getenv("DISPLAY"), "X display to capture")
+	region     = flag.String("region", "2560x1440+0+0", "capture region WxH+X+Y")
+	fps        = flag.Int("fps", 60, "capture frame rate")
+	kbps       = flag.Int("kbps", 12000, "starting bitrate, and the most auto-quality goes to unless -max-kbps")
+	auto       = flag.Bool("auto", true, "auto-quality: follow what the player's connection carries")
+	minKbps    = flag.Int("min-kbps", 1500, "auto-quality's lowest bitrate (video and recovery packets)")
+	maxKbps    = flag.Int("max-kbps", 0, "auto-quality's highest bitrate (0 = -kbps)")
+	target     = flag.Duration("target", 15*time.Millisecond, "auto-quality: how far frames may queue behind their best delay")
+	encoder    = flag.String("encoder", "nvenc", "nvenc or x264")
+	usePad     = flag.Bool("pad", false, "plug in a virtual controller and apply the player's input")
+	stun       = flag.String("stun", "", "optional STUN server, e.g. stun:stun.l.google.com:19302")
+	netSim     = flag.String("net", "", "simulate a bad network for what the host sends, e.g. delay=20ms,jitter=5ms,loss=1%,burst=2,kbps=20000 (see netsim)")
+	kbpsAt     = flag.String("kbps-at", "", "for testing the encoder: change the bitrate at set times, e.g. 5s:4000,10s:12000")
+	useLadder  = flag.Bool("ladder", true, "step resolution and frame rate down for a struggling player or link, and back up (package ladder)")
+	paceMode   = flag.String("pace", "auto", "spread each frame's packets just above the player's measured link speed: auto (once the link is seen dropping bursts), on, or off")
+	fecMode    = flag.String("fec", "auto", "recovery packets: auto (follow the player's reported loss), off, or a fixed percentage such as 20")
+	udpPort    = flag.Int("udp-port", 0, "carry all WebRTC traffic on this one UDP port, for forwarding on the router (0 = any)")
+	public     = flag.String("public", "", "this machine's internet address (IP or name, e.g. a dynamic DNS name), offered to the player")
+	iface      = flag.String("iface", "", "use only this network interface (default: all but Docker, VPN and bridge ones)")
+	token      = flag.String("token", "", "secret the player must give; made up and printed if empty and -listen isn't loopback")
+	signal     = flag.String("signal", "http", "how players reach us: http (-listen) or stdio (JSON lines from the Eris app: offers in, answers and summaries out)")
+	gameSound  = flag.Bool("game-sound", false, "send this PC's sound (the game's) to the player, without the Eris app's own (Linux, PipeWire)")
+	notPID     = flag.Int("exclude-pid", 0, "with -game-sound: leave out this process's sound and its children's (default: the program that started us, the Eris app)")
+	maxPlayers = flag.Int("players", 3, "with -signal stdio: most players at once, each with their own stream and controller (players 2 to 4 with the host as player 1)")
+	pipe       = flag.String("pipeline", "lib", "lib: capture and encode with FFmpeg's libraries in this program (NVENC only); ffmpeg: run the ffmpeg program (for comparison)")
 )
 
 var width, height, offX, offY int
@@ -93,7 +98,12 @@ func main() {
 		*token = hex.EncodeToString(b)
 		log.Printf("player token: %s (give it to the player with -token)", *token)
 	}
-	h := &host{api: api, sim: sim}
+	h := &host{api: api, sim: sim, players: map[int64]*webrtc.PeerConnection{}}
+	if *gameSound {
+		startGameSound()
+		defer stopGameSound()
+		quitOnSignal()
+	}
 	if *signal == "stdio" {
 		log.Printf("ptsend: capturing %s %s at %d fps, %d kbps, %s, auto-quality %v; players through the app",
 			*display, *region, *fps, *kbps, *encoder, *auto)
@@ -127,9 +137,11 @@ type host struct {
 	api  *webrtc.API
 	sim  *netsim.Net
 	mu   sync.Mutex
-	busy bool
-	cur  *webrtc.PeerConnection // the player's connection, while there is one
-	peer int64                  // and who it is (stdio mode)
+	busy bool                   // -signal http: one player at a time
+	cur  *webrtc.PeerConnection // ...their connection, while there is one
+	// -signal stdio (the Eris app): up to -players players at once, each
+	// with their own stream and controller, by member.
+	players map[int64]*webrtc.PeerConnection
 }
 
 // stdioMsg is one JSON line between the Eris app and the helper (-signal stdio).
@@ -155,8 +167,10 @@ func emit(m stdioMsg) {
 	os.Stdout.Write(append(b, '\n'))
 }
 
-// serveStdio takes players' offers from the app, one at a time, answers
-// them, and reports each session's summary when it ends. "stop" ends it.
+// serveStdio takes players' offers from the app (the host has let them in),
+// answers them, and reports each session's summary when it ends. "end"
+// ends one player's session (the host took the controller back); "stop"
+// ends everything.
 func (h *host) serveStdio() {
 	sc := bufio.NewScanner(os.Stdin)
 	sc.Buffer(make([]byte, 1<<20), 1<<20)
@@ -172,46 +186,83 @@ func (h *host) serveStdio() {
 			// stream test replacing an ordinary join, say): their old
 			// session ends, reporting as usual, and the new one starts.
 			h.mu.Lock()
-			again := h.busy && h.peer == m.Peer
+			_, again := h.players[m.Peer]
 			h.mu.Unlock()
 			if again {
-				log.Printf("the player connected again; ending their earlier session")
-				h.endSession()
+				log.Printf("player %d connected again; ending their earlier session", m.Peer)
+				h.endPlayer(m.Peer)
 			}
 			h.mu.Lock()
-			busy := h.busy
-			h.busy = true
-			if !busy {
-				h.peer = m.Peer
+			full := len(h.players) >= *maxPlayers
+			if !full {
+				h.players[m.Peer] = nil // place kept while the session starts
 			}
 			h.mu.Unlock()
-			if busy {
-				log.Printf("refused a second player: someone is already playing")
-				emit(stdioMsg{Type: "refused", Peer: m.Peer, Error: "someone is already playing"})
+			if full {
+				log.Printf("refused player %d: all %d places are taken", m.Peer, *maxPlayers)
+				emit(stdioMsg{Type: "refused", Peer: m.Peer, Error: fmt.Sprintf("has all %d player places taken", *maxPlayers)})
 				continue
 			}
 			peer, testID := m.Peer, m.TestID
-			ans, err := h.startSession(m.SDP, func(sum map[string]any) {
+			ans, err := h.startSession(m.SDP, peer, func(sum map[string]any) {
 				emit(stdioMsg{Type: "summary", Peer: peer, TestID: testID, Summary: sum})
 			})
 			if err != nil {
 				h.mu.Lock()
-				h.busy = false
+				delete(h.players, peer)
 				h.mu.Unlock()
 				emit(stdioMsg{Type: "refused", Peer: m.Peer, Error: err.Error()})
 				continue
 			}
 			emit(stdioMsg{Type: "answer", Peer: m.Peer, SDP: ans.SDP, Width: ans.Width, Height: ans.Height, FPS: ans.FPS})
+		case "end": // the host took this player's controller back
+			log.Printf("ending player %d's session (the host's choice)", m.Peer)
+			h.endPlayer(m.Peer)
 		case "stop":
-			h.endSession()
+			h.endAll()
 			return
 		}
+	}
+	h.endAll()
+}
+
+// endAll ends every player's session (stdio) or the player's (http).
+func (h *host) endAll() {
+	h.mu.Lock()
+	peers := make([]int64, 0, len(h.players))
+	for p := range h.players {
+		peers = append(peers, p)
+	}
+	h.mu.Unlock()
+	for _, p := range peers {
+		h.endPlayer(p)
 	}
 	h.endSession()
 }
 
-// endSession ends the current player's session, if there is one, and waits
-// (up to 2 s) for its summary to go out: a stream test's host results.
+// endPlayer ends one player's session and waits (up to 2 s) for its summary
+// to go out: a stream test's host results.
+func (h *host) endPlayer(peer int64) {
+	h.mu.Lock()
+	pc := h.players[peer]
+	h.mu.Unlock()
+	if pc == nil {
+		return
+	}
+	pc.Close()
+	for i := 0; i < 40; i++ {
+		h.mu.Lock()
+		cur, ok := h.players[peer]
+		h.mu.Unlock()
+		if !ok || cur != pc {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// endSession ends the player's session in -signal http mode, if there is
+// one, and waits (up to 2 s) for its summary to go out.
 func (h *host) endSession() {
 	h.mu.Lock()
 	pc := h.cur
@@ -259,7 +310,7 @@ func (h *host) offer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	answer, err := h.startSession(off.SDP, func(sum map[string]any) {
+	answer, err := h.startSession(off.SDP, -1, func(sum map[string]any) {
 		b, _ := json.MarshalIndent(sum, "", "  ")
 		log.Printf("session summary: %s", b)
 	})
@@ -275,13 +326,18 @@ func (h *host) offer(w http.ResponseWriter, r *http.Request) {
 }
 
 // startSession answers a player's offer; ended gets the session's summary.
-func (h *host) startSession(offerSDP string, ended func(map[string]any)) (*sig.Answer, error) {
+// peer is the member (stdio), or -1 for the one player of -signal http.
+func (h *host) startSession(offerSDP string, peer int64, ended func(map[string]any)) (*sig.Answer, error) {
 	pc, err := h.api.NewPeerConnection(webrtc.Configuration{ICEServers: sig.ICEServers(*stun)})
 	if err != nil {
 		return nil, err
 	}
 	h.mu.Lock()
-	h.cur = pc
+	if peer < 0 {
+		h.cur = pc
+	} else {
+		h.players[peer] = pc
+	}
 	h.mu.Unlock()
 	track, err := webrtc.NewTrackLocalStaticRTP(sig.Codec, "video", "eris")
 	if err != nil {
@@ -302,6 +358,17 @@ func (h *host) startSession(offerSDP string, ended func(map[string]any)) (*sig.A
 	if err != nil {
 		pc.Close()
 		return nil, err
+	}
+	// Sound only for a player that asked for it (older players don't).
+	var sound *webrtc.TrackLocalStaticSample
+	if *gameSound && strings.Contains(offerSDP, "m=audio") {
+		if sound, err = webrtc.NewTrackLocalStaticSample(sig.AudioCodec, "sound", "eris"); err == nil {
+			_, err = pc.AddTrack(sound)
+		}
+		if err != nil {
+			pc.Close()
+			return nil, err
+		}
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -350,18 +417,28 @@ func (h *host) startSession(offerSDP string, ended func(map[string]any)) (*sig.A
 			go s.sender(ctx)
 			go s.stream(ctx)
 			go s.report(ctx)
+			if sound != nil {
+				soundTo(sound, true)
+			}
 		case webrtc.PeerConnectionStateFailed, webrtc.PeerConnectionStateClosed,
 			webrtc.PeerConnectionStateDisconnected:
 			once.Do(func() {
+				if sound != nil {
+					soundTo(sound, false)
+				}
 				cancel()
 				pc.Close()
 				s.closePad()
 				log.Printf("player left; waiting for the next one")
 				ended(s.summary())
 				h.mu.Lock()
-				h.busy = false
-				if h.cur == pc {
-					h.cur = nil
+				if peer < 0 {
+					h.busy = false
+					if h.cur == pc {
+						h.cur = nil
+					}
+				} else if h.players[peer] == pc {
+					delete(h.players, peer)
 				}
 				h.mu.Unlock()
 			})
@@ -481,6 +558,7 @@ func (s *session) summary() map[string]any {
 		"player_decode_ms":  float64(s.pDecUs) / 1000,
 		"player_gpu_decode": s.pHW,
 		"changes":           s.events,
+		"game_sound":        soundNote(),
 	}
 }
 
@@ -566,7 +644,7 @@ func (s *session) input(b []byte) {
 		return
 	}
 	if s.pad == nil {
-		p, err := uinput.Create("Eris Prototype Pad")
+		p, err := uinput.Create("Eris Pad")
 		if err != nil {
 			log.Printf("virtual controller: %v", err)
 			*usePad = false

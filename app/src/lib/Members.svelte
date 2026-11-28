@@ -27,9 +27,9 @@
             <span class="badge">LIVE</span>
             <span class="muted small">{conn.live[m.id].title}</span>
             {#if stream.playing?.hostId === m.id}
-              <button onclick={() => stream.leave()}>Leave</button>
+              <button onclick={() => stream.leave()}>{stream.playing.state === 'asking' ? 'Cancel' : 'Leave'}</button>
             {:else}
-              <button class="primary" onclick={() => stream.join(conn, m.id)}>Join</button>
+              <button class="primary" onclick={() => stream.join(conn, m.id)} title="Asks {m.name} to let you play">Ask to play</button>
             {/if}
           </div>
         {/if}

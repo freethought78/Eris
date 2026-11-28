@@ -43,7 +43,7 @@
         <button class:lit={voice.camera} title={voice.camera ? 'Turn your camera off' : 'Turn your camera on'} onclick={() => voice.toggleCamera()}>
           {#if voice.camera}<Video size={I} />{:else}<VideoOff size={I} />{/if}
         </button>
-        <button class:lit={voice.sharing} title={voice.sharing ? 'Stop sharing your screen' : 'Share your screen or a window (people in the room choose to watch it)'} onclick={() => voice.toggleShare()}>
+        <button class:lit={voice.sharing && !voice.game} title={voice.game ? 'Share a screen or window instead of your game' : voice.sharing ? 'Stop sharing your screen' : 'Share your screen or a window (people in the room choose to watch it)'} onclick={() => voice.toggleShare()}>
           <MonitorUp size={I} />
         </button>
         <button class="leave" title="Leave the voice" onclick={() => voice.leave()}><PhoneOff size={I} /></button>

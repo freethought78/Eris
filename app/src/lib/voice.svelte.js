@@ -9,7 +9,7 @@
 // Nothing is received automatically except voices and cameras: a screen
 // share is only sent to those who press Watch (LiveKit then sends it only
 // while someone watches), to keep traffic down.
-import { Room, RoomEvent, Track, VideoPresets } from 'livekit-client'
+import { AudioPresets, Room, RoomEvent, Track, VideoPresets, createLocalScreenTracks } from 'livekit-client'
 import { httpBase } from './conn.svelte.js'
 
 const store = {
@@ -42,12 +42,16 @@ class Voice {
   stage = $state(null) // {id, name, track}: the share being watched
   myShare = $state(null) // {track}: our own share, for its preview
   sharing = $state(false) // we share our screen
+  game = $state(false) // our share is our game, for spectators (Play Together)
   error = $state('')
   hearing = $state(0) // others' audio tracks being played
   volumes = $state(store.get('volumes', {})) // member id -> 0..1
   devices = $state(store.get('devices', {})) // audioinput, audiooutput, videoinput -> device id
 
   #room = null
+  #gameWanted = false // we're live for Play Together in this call
+  #gameDeclined = false // ...but its share was stopped by hand
+  #gameTracks = [] // the game share's video and sound
   #ctx = null // the call's audio engine: volumes above 100%, with a limiter
   #audio = new Map() // track sid -> element
   #box = null
@@ -164,16 +168,114 @@ class Voice {
   // Screen sharing: the window shows a picker (main/main.js asks it).
   async toggleShare() {
     if (!this.#room) return
+    if (this.game) {
+      // Sharing by hand instead of the game.
+      await this.#stopGame()
+      this.#gameDeclined = true
+    }
     try {
       await this.#room.localParticipant.setScreenShareEnabled(
         !this.sharing,
-        { audio: true, contentHint: 'detail', resolution: { width: 1920, height: 1080, frameRate: 30 } },
+        {
+          // The share's sound (Windows): the system's sound minus Eris's own
+          // (the call's voices), so nobody hears themselves; and none of the
+          // voice processing that cuts music and game sound in and out.
+          audio: { restrictOwnAudio: true, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+          contentHint: 'detail',
+          resolution: { width: 1920, height: 1080, frameRate: 30 },
+        },
         { videoEncoding: { maxBitrate: 4_000_000, maxFramerate: 30 } },
       )
+      // Whether the engine left our own sound out (for the diagnostics: it
+      // can only be checked on Windows, in a real share).
+      const audio = this.#room.localParticipant.getTrackPublication(Track.Source.ScreenShareAudio)?.track
+      if (audio) console.info(`share sound: ${JSON.stringify(audio.mediaStreamTrack.getSettings())}`)
     } catch (err) {
       if (!/denied|cancel|abort/i.test(String(err.message || err))) this.error = `Couldn't share your screen (${err.message || err}).`
     }
     this.#refresh()
+    // No share by hand now, while live for Play Together: the game again.
+    if (!this.sharing && this.#gameWanted) {
+      this.#gameDeclined = false
+      this.setGameShare(true)
+    }
+  }
+
+  // While we're live for Play Together and in a voice room on that server,
+  // the game also goes to the call, as our share, with the game's sound
+  // (without the call's voices: the host helper's "Eris-game-sound"
+  // device). Spectators press Watch as for any share, and nothing is sent
+  // until someone does. The player gets the low-latency stream from the
+  // helper instead. App.svelte calls this whenever that changes.
+  async setGameShare(on) {
+    this.#gameWanted = on
+    if (!on) {
+      this.#gameDeclined = false
+      await this.#stopGame()
+      return
+    }
+    const room = this.#room
+    if (!room || this.game || this.sharing || this.#gameDeclined) return
+    this.game = true
+    try {
+      await window.eris.shareMainScreenNext()
+      const [video] = await createLocalScreenTracks({ audio: false, resolution: { width: 1280, height: 720, frameRate: 30 }, contentHint: 'motion' })
+      if (!this.game || this.#room !== room) return video.stop()
+      this.#gameTracks.push(video)
+      await room.localParticipant.publishTrack(video, { source: Track.Source.ScreenShare, name: 'game', simulcast: false, videoEncoding: { maxBitrate: 2_500_000, maxFramerate: 30 } })
+      const sound = await this.#gameSound()
+      if (sound && this.game && this.#room === room) {
+        this.#gameTracks.push(sound)
+        await room.localParticipant.publishTrack(sound, {
+          source: Track.Source.ScreenShareAudio, name: 'game-sound', dtx: false, red: false, forceStereo: true, audioPreset: AudioPresets.musicHighQualityStereo,
+        })
+      } else if (sound) sound.stop()
+      console.info(`game share: on, ${sound ? 'with' : 'without'} its sound`)
+    } catch (err) {
+      console.error(`game share: ${err.message || err}`)
+      await this.#stopGame()
+    }
+    this.#refresh()
+  }
+
+  // The game's sound: the host helper's capture device (Linux), found by
+  // name; it can take a moment to appear after going live.
+  async #gameSound() {
+    for (let i = 0; i < 10; i++) {
+      const devs = await navigator.mediaDevices.enumerateDevices().catch(() => [])
+      const d = devs.find((d) => d.kind === 'audioinput' && /Eris-game-sound/i.test(d.label))
+      if (d) {
+        const s = await navigator.mediaDevices.getUserMedia({
+          audio: { deviceId: { exact: d.deviceId }, echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 2 },
+        })
+        return s.getAudioTracks()[0]
+      }
+      await new Promise((r) => setTimeout(r, 300))
+    }
+    return null
+  }
+
+  // stopGame ends the game share (by hand: until we go live again).
+  async stopGame() {
+    await this.#stopGame()
+    this.#gameDeclined = true
+  }
+
+  async #stopGame() {
+    const tracks = this.#gameTracks
+    this.#gameTracks = []
+    const was = this.game
+    this.game = false
+    for (const t of tracks) {
+      try {
+        await this.#room?.localParticipant.unpublishTrack(t, true)
+      } catch {}
+      t.stop()
+    }
+    if (was) {
+      console.info('game share: off')
+      this.#refresh()
+    }
   }
 
   // watch receives one share (and stops receiving the one watched before).
@@ -265,6 +367,12 @@ class Voice {
     const p = this.#room?.remoteParticipants.get(String(id))
     const pub = p?.getTrackPublication(Track.Source.ScreenShare)
     return !!pub?.isSubscribed
+  }
+
+  // shareSound: whether someone's share's sound is coming to us (tests).
+  shareSound(id) {
+    const p = this.#room?.remoteParticipants.get(String(id))
+    return !!p?.getTrackPublication(Track.Source.ScreenShareAudio)?.track
   }
 
   setVolume(id, v) {
@@ -382,8 +490,8 @@ class Voice {
       if (pub?.track && !pub.isMuted) tiles.push({ id: p.identity, name, track: pub.track, local })
       const sh = p.getTrackPublication(Track.Source.ScreenShare)
       if (sh) {
-        shares.push({ id: p.identity, name, local })
-        if (!local && this.watching === p.identity && sh.track) stage = { id: p.identity, name, track: sh.track }
+        shares.push({ id: p.identity, name, local, game: sh.trackName === 'game' })
+        if (!local && this.watching === p.identity && sh.track) stage = { id: p.identity, name, track: sh.track, game: sh.trackName === 'game' }
       }
     }
     if (this.watching && !shares.some((s) => s.id === this.watching)) this.watching = '' // they stopped
@@ -414,6 +522,10 @@ class Voice {
     this.stage = null
     this.myShare = null
     this.sharing = false
+    this.game = false
+    for (const t of this.#gameTracks) t.stop()
+    this.#gameTracks = []
+    this.#gameDeclined = false
   }
 }
 

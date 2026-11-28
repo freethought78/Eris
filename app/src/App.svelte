@@ -54,6 +54,11 @@
     if (!r.ok) conn.error = r.error
     else conn.connect()
   }
+  // Live for Play Together and in a voice room on the same server: the game
+  // goes to the call too, for spectators (voice.setGameShare).
+  $effect(() => {
+    voice.setGameShare(stream.live && !!stream.hostConn && voice.conn === stream.hostConn && !!voice.state && voice.state !== 'connecting')
+  })
   let room = $derived(conn ? conn.rooms.find((r) => r.id === roomSel[conn.entry.address]) || conn.rooms[0] : null)
 
   function connect(entry) {
@@ -177,9 +182,18 @@
         await until(() => voice.stage?.track)
         await until(() => (voice.stage.track.mediaStreamTrack?.getSettings().width || 0) > 0 || document.querySelector('.stage video')?.videoWidth > 0)
         console.info(`auto test: watching ${s.name}'s screen`)
+        if (voice.stage.game) {
+          // The game's sound comes from the host helper's capture device,
+          // which Chromium's fake devices (tests) hide: then there's none.
+          for (let i = 0; i < 25 && !voice.shareSound(s.id); i++) await new Promise((r) => setTimeout(r, 200))
+          console.info(`auto test: watching ${s.name}'s game, ${voice.shareSound(s.id) ? 'with' : 'without'} its sound`)
+        }
       }
     }
-    if (a.live) stream.goLive(c, { extraArgs: a.hostArgs })
+    if (a.live) {
+      stream.autoAllow = true // players in tests don't wait for a yes
+      stream.goLive(c, { extraArgs: a.hostArgs })
+    }
     if (a.watch) {
       // Join a member's stream as soon as they're live (a plain join, no test).
       await until(() => c.members.some((m) => m.name === a.watch && c.live[m.id]))
@@ -341,6 +355,13 @@
       {#if stream.notice}
         <div class="banner">{stream.notice} <button class="x" onclick={() => (stream.notice = '')}>×</button></div>
       {/if}
+      {#each stream.requests as r (r.id)}
+        <div class="banner ask">
+          <span>🎮 <b>{r.name}</b> wants to play on your stream{stream.players.length >= 3 ? ' (all 3 player places are taken: take a controller back first)' : ''}</span>
+          <button class="primary" disabled={stream.players.length >= 3} onclick={() => stream.allow(r.id)}>Let them play</button>
+          <button onclick={() => stream.decline(r.id)}>Decline</button>
+        </div>
+      {/each}
 
       <div class="body">
         <Rooms
@@ -415,6 +436,9 @@
   .banner { background: var(--surface-2); border-left: 3px solid var(--highlight); padding: 8px 12px; margin: 8px 12px 0; border-radius: var(--radius); display: flex; align-items: center; gap: 8px; }
   .banner.warn { border-left-color: var(--warn); display: block; }
   .banner.warn p { margin: 0 0 8px; }
+  .banner.ask { border-left-color: var(--good); }
+  .banner.ask span { flex: 1; }
+  .banner.ask button { padding: 4px 12px; font-size: 13px; }
   .banner .x { margin-left: auto; background: none; border: none; padding: 0 6px; }
   .body { flex: 1; display: flex; min-height: 0; }
   .tests { flex: 1; overflow: auto; padding: 16px 24px; }

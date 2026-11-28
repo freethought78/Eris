@@ -27,8 +27,8 @@
   // preview. One can be big (clicked, or the share just watched); the rest
   // are tiles. The big one's height is dragged and kept on this PC.
   let videos = $derived([
-    ...(voice.stage ? [{ key: 'share:' + voice.stage.id, kind: 'share', label: `${voice.stage.name}'s screen`, track: voice.stage.track }] : []),
-    ...(voice.myShare ? [{ key: 'share:me', kind: 'share', local: true, label: 'Your screen (what others see)', track: voice.myShare.track }] : []),
+    ...(voice.stage ? [{ key: 'share:' + voice.stage.id, kind: 'share', label: `${voice.stage.name}'s ${voice.stage.game ? 'game' : 'screen'}`, track: voice.stage.track }] : []),
+    ...(voice.myShare ? [{ key: 'share:me', kind: 'share', local: true, label: voice.game ? 'Your game (what spectators see)' : 'Your screen (what others see)', track: voice.myShare.track }] : []),
     ...voice.tiles.map((t) => ({ key: 'cam:' + t.id + (t.local ? ':me' : ''), kind: 'cam', label: t.local ? `${t.name} (you)` : t.name, track: t.track, mirror: t.local })),
   ])
   let focus = $state('') // the big one's key; '' = the watched share; 'none' = none
@@ -240,8 +240,14 @@
     <div class="cards">
       {#each voice.shares as s (s.id)}
         <div class="card">
-          <span>📺 <b>{s.local ? 'You are' : `${s.name} is`}</b> sharing {s.local ? 'your' : 'their'} screen</span>
-          {#if s.local}
+          {#if s.game}
+            <span>🎮 <b>{s.local ? 'You are' : `${s.name} is`}</b> sharing {s.local ? 'your' : 'their'} game {#if s.local}<span class="muted">for anyone who wants to watch</span>{/if}</span>
+          {:else}
+            <span>📺 <b>{s.local ? 'You are' : `${s.name} is`}</b> sharing {s.local ? 'your' : 'their'} screen</span>
+          {/if}
+          {#if s.local && s.game}
+            <button onclick={() => voice.stopGame()} title="Stop showing your game in the call (Play Together goes on)">Stop sharing</button>
+          {:else if s.local}
             <button onclick={() => voice.toggleShare()}>Stop sharing</button>
           {:else if voice.watching === s.id}
             <button onclick={() => voice.unwatch()}>Stop watching</button>
@@ -255,12 +261,23 @@
           <span>🎮 <b>{m.id === conn.you?.id ? 'You are' : `${m.name} is`}</b> live for Play Together <span class="muted">{conn.live[m.id]?.title || ''}</span></span>
           {#if m.id === conn.you?.id}
             <button onclick={() => stream.stopLive()}>Stop</button>
+          {:else if stream.playing?.hostId === m.id && stream.playing.state === 'asking'}
+            <span class="muted small">Waiting for {m.name} to let you in...</span>
+            <button onclick={() => stream.leave()}>Cancel</button>
           {:else if stream.playing?.hostId === m.id}
             <button onclick={() => stream.leave()}>Leave</button>
           {:else}
-            <button class="primary" onclick={() => stream.join(conn, m.id)} title="Opens their game in a window; your controller plays">Join</button>
+            <button class="primary" onclick={() => stream.join(conn, m.id)} title="Asks {m.name} to let you play: their game opens in a window and your controller plays">Ask to play</button>
           {/if}
         </div>
+        {#if m.id === conn.you?.id && stream.players.length}
+          <div class="card players">
+            {#each stream.players as p, i (p.id)}
+              <span class="player">🎮 <b>{p.name}</b> <span class="muted small">player {i + 2}</span>
+                <button onclick={() => stream.takeBack(p.id)} title="Unplugs their controller and closes their game window">Take controller back</button></span>
+            {/each}
+          </div>
+        {/if}
       {/each}
     </div>
   {/if}
@@ -402,10 +419,16 @@
   .cards { display: grid; gap: 6px; padding: 10px 18px 0; }
   .card { display: flex; align-items: center; gap: 10px; justify-content: space-between; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 10px; }
   .card button { padding: 4px 12px; font-size: 13px; }
+  .card.players { justify-content: flex-start; flex-wrap: wrap; gap: 14px; }
+  .player { display: inline-flex; align-items: center; gap: 6px; }
   .media { padding: 10px 18px 0; display: grid; gap: 6px; }
   .stage { background: #000; border-radius: var(--radius); overflow: hidden; display: flex; flex-direction: column; min-height: 140px; }
-  .stage .screen { flex: 1; min-height: 0; display: grid; place-items: center; }
-  .stage .screen :global(video) { width: 100%; height: 100%; object-fit: contain; display: block; }
+  /* The whole picture always shows, with bars where its shape differs from
+     the space (Discord-style): the video fills the area exactly and fits
+     the picture inside it. (As a grid item it took the picture's own
+     height and the bottom got cut off.) */
+  .stage .screen { flex: 1; min-height: 0; position: relative; }
+  .stage .screen :global(video) { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: block; }
   .stage:fullscreen { height: 100vh !important; }
   .stagebar { display: flex; gap: 6px; align-items: center; padding: 4px 8px; background: rgba(255, 255, 255, 0.06); font-size: 13px; }
   .stagebar button { padding: 3px 8px; font-size: 12px; display: inline-grid; place-items: center; }
@@ -416,8 +439,8 @@
   .tile { position: relative; width: 220px; aspect-ratio: 16 / 9; background: #000; border-radius: var(--radius); overflow: hidden; flex: none; }
   .tile.share { outline: 1px solid var(--border); }
   .tile .pick { position: absolute; inset: 0; padding: 0; border: none; background: none; cursor: zoom-in; }
-  .tile .video { width: 100%; height: 100%; }
-  .tile :global(video) { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .tile .video { width: 100%; height: 100%; position: relative; }
+  .tile :global(video) { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
   .tile.share :global(video) { object-fit: contain; }
   .tile:fullscreen :global(video) { object-fit: contain; }
   .tname { position: absolute; left: 6px; bottom: 6px; background: rgba(0, 0, 0, 0.6); padding: 1px 6px; border-radius: 4px; font-size: 12px; pointer-events: none; }

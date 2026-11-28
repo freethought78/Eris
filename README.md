@@ -72,10 +72,12 @@ The first time you open a private room, Eris asks for its password; you only giv
 - The panel at the bottom of the rooms list has **mute**, **deafen** (hear nobody, and
   mute), **camera**, **share your screen** and **leave** (point at a button for its name).
   Cameras and shares show above the room's chat: click one to make it big, drag the bar
-  under it to resize, and double-click (or its button) for fullscreen. Your own share shows
-  too, as others see it.
+  under it to resize, and double-click (or its button) for fullscreen. The whole picture
+  always shows, with black bars where its shape differs from the space. Your own share
+  shows too, as others see it.
 - **Sharing your screen:** pick a whole screen or one window (on Windows, tick *Share
-  sound too* to include its sound). Others in the room see a card saying you're sharing,
+  sound too* to include its sound; Eris leaves the call's voices out of it, so nobody hears
+  themselves). Others in the room see a card saying you're sharing,
   and only those who press **Watch** receive it, so nobody's connection carries a share
   they aren't watching. Watching opens it big above the chat.
 - Click someone's name under the room to change how loud they are, from silent to 300%
@@ -128,11 +130,24 @@ days.
 ## Playing together
 
 On Linux, press **🎮** in the panel under the rooms to go live: low-latency streaming of
-your main screen, for playing together. Members in your room's voice see a card saying
-you're live and press **Join** (or Join next to your name in the members list): the game
-opens in a window on their PC (F11, Alt+Enter or a double-click for fullscreen), and their
-controller works in your game. If you use Mullvad, Eris runs your server outside it, so
-friends can reach it.
+your main screen, and its sound, for playing together.
+
+- **Players:** members in your room's voice see a card saying you're live and press **Ask
+  to play** (or next to your name in the members list). You see who's asking, at the top,
+  and choose **Let them play** or **Decline**. Once in, the game opens in a window on their
+  PC (F11, Alt+Enter or a double-click for fullscreen), with the game's sound, and their
+  controller works in your game. Up to 3 players at once (players 2 to 4; you're player
+  1), each with their own controller. **Take controller back**, on your live card, unplugs
+  a player's controller and closes their game window; they can ask again.
+- **Spectators:** while you're live and in a room's voice, your game is also shared in the
+  call, with its sound. Everyone else presses **Watch** on the card, as with any shared
+  screen, and nothing is sent until someone does. *Stop sharing* on that card stops it
+  (Play Together goes on); sharing a screen or window by hand replaces it.
+- **Sound:** players and spectators hear your game and everything else your PC plays,
+  except Eris itself: the call's voices are left out, so nobody hears themselves.
+- **Mullvad:** if it's installed, Eris always runs your server and Play Together outside
+  it, so friends can reach them even if you connect Mullvad later. With another VPN, add
+  Eris to its split tunnelling (or turn it off while hosting).
 
 ---
 

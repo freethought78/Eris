@@ -48,15 +48,18 @@ function send(channel, data) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, data)
 }
 
-// mullvadConnected: the host runs outside a connected Mullvad VPN, so a
-// remote player's packets come and go through the router (DESIGN.md 5.4).
-function mullvadConnected() {
-  if (process.platform !== 'linux') return false
-  try {
-    return /^Connected/m.test(execFileSync('mullvad', ['status'], { encoding: 'utf8', timeout: 3000 }))
-  } catch {
-    return false
+// mullvadExclude: with Mullvad installed, the host always runs outside the VPN
+// (connected now or later), so a remote player's packets come and go through
+// the router (DESIGN.md 5.4).
+function mullvadExclude() {
+  if (process.platform !== 'linux') return ''
+  for (const dir of (process.env.PATH || '').split(path.delimiter)) {
+    try {
+      fs.accessSync(path.join(dir, 'mullvad-exclude'), fs.constants.X_OK)
+      return path.join(dir, 'mullvad-exclude')
+    } catch {}
   }
+  return ''
 }
 
 function startHelper(role, opts) {
@@ -78,6 +81,9 @@ function startHelper(role, opts) {
     const udpPort = opts.udpPort || (process.env.ERIS_PROFILE === 'dev' ? 7411 : 7401)
     args.push('-region', region, '-udp-port', String(udpPort), '-pad')
     if (opts.publicAddr) args.push('-public', opts.publicAddr)
+    // The game's sound goes to the player too, without this app's own
+    // (the call's voices): Linux with PipeWire for now.
+    if (process.platform === 'linux') args.push('-game-sound', '-exclude-pid', String(process.pid))
   } else {
     args.push('-w', String(opts.width || 1280), '-h', String(opts.height || 720))
     if (opts.seconds) args.push('-seconds', String(opts.seconds))
@@ -85,15 +91,17 @@ function startHelper(role, opts) {
   }
   if (opts.extraArgs) args.push(...opts.extraArgs)
   let cmd = exe
-  if (role === 'host' && mullvadConnected()) {
+  if (role === 'host' && mullvadExclude()) {
     args = [exe, ...args]
-    cmd = 'mullvad-exclude'
+    cmd = mullvadExclude()
   }
   fs.mkdirSync(userFile('logs'), { recursive: true })
   const stamp = new Date().toISOString().replace(/[:.]/g, '-')
   const logPath = userFile(path.join('logs', `${role}-${stamp}.log`))
   const log = fs.createWriteStream(logPath)
-  const child = spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'] })
+  // Tests stay silent: the player's sound goes to SDL's "dummy" output.
+  const env = process.env.ERIS_FAKE_MEDIA ? { ...process.env, SDL_AUDIODRIVER: 'dummy' } : process.env
+  const child = spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'], env })
   helpers[role] = child
   child.stderr.pipe(log)
   readline.createInterface({ input: child.stdout }).on('line', (line) => {
@@ -338,6 +346,10 @@ ipcMain.handle('download', (_e, url) => {
 // screen (ERIS_AUTO_SHARE).
 const picks = new Map() // request number -> resolve
 let pickCount = 0
+// The game share for spectators (Play Together) takes the main screen, the
+// one the host helper streams, without asking.
+let mainScreenNext = false
+ipcMain.handle('share-main-screen-next', () => (mainScreenNext = true))
 function shareHandler(_request, callback) {
   // Screens and windows asked for apart: together, one failing (no window
   // list on some desktops) leaves both empty.
@@ -346,7 +358,12 @@ function shareHandler(_request, callback) {
     .then(([screens, windows]) => [...screens, ...windows])
     .then(async (sources) => {
       let choice = null
-      if (process.env.ERIS_AUTO_SHARE) {
+      if (mainScreenNext) {
+        mainScreenNext = false
+        const id = String(screen.getPrimaryDisplay().id)
+        const s = sources.find((s) => s.display_id === id) || sources.find((s) => s.id.startsWith('screen:'))
+        choice = { id: s?.id, audio: false }
+      } else if (process.env.ERIS_AUTO_SHARE) {
         choice = { id: sources.find((s) => s.id.startsWith('screen:'))?.id, audio: false }
       } else {
         const n = ++pickCount

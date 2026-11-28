@@ -30,10 +30,20 @@ var Codec = webrtc.RTPCodecCapability{
 // video. Only Eris understands it.
 var FECCodec = webrtc.RTPCodecCapability{MimeType: "video/x-eris-fec", ClockRate: 90000}
 
-// Payload types for the two streams.
+// AudioCodec is the game's sound (package opus): stereo, 10 ms packets, with
+// Opus's own loss recovery.
+var AudioCodec = webrtc.RTPCodecCapability{
+	MimeType:    webrtc.MimeTypeOpus,
+	ClockRate:   48000,
+	Channels:    2,
+	SDPFmtpLine: "minptime=10;useinbandfec=1;stereo=1;sprop-stereo=1",
+}
+
+// Payload types for the streams.
 const (
 	PayloadVideo = 102
 	PayloadFEC   = 120
+	PayloadAudio = 111
 )
 
 // Options say how this side connects.
@@ -96,6 +106,10 @@ func NewAPI(o Options) (*webrtc.API, *netsim.Net, error) {
 		if err := m.RegisterCodec(c, webrtc.RTPCodecTypeVideo); err != nil {
 			return nil, nil, err
 		}
+	}
+	if err := m.RegisterCodec(webrtc.RTPCodecParameters{RTPCodecCapability: AudioCodec, PayloadType: PayloadAudio},
+		webrtc.RTPCodecTypeAudio); err != nil {
+		return nil, nil, err
 	}
 	ir := &interceptor.Registry{}
 	if err := webrtc.ConfigureRTCPReports(ir); err != nil {

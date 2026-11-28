@@ -10,7 +10,7 @@
 # both messages arrived, each hears and sees the other, and both sides'
 # results are stored on the server.
 #
-#   app/test-e2e.sh [seconds] [watching]       (default 20)
+#   app/test-e2e.sh [seconds] [watching|game]       (default 20)
 #
 # "watching": the player joins the stream first, the ordinary way, and the
 # test starts 10 s later and replaces that run (as in the first test between
@@ -27,6 +27,10 @@ R=$(cd "$(dirname "$0")/.." && pwd); T=$(mktemp -d); mkdir -p $T/data
 SECS=${1:-20}
 HOSTX=""; PLAYERX=""
 if [ "${2:-}" = watching ]; then HOSTX=',"testDelay":10'; PLAYERX=',"watch":"Host"'; fi
+# "game": the host doesn't share by hand; going live shares its game in the
+# call (for spectators), which the player watches (without the game's sound
+# here: Chromium's fake devices hide the device it comes from).
+SHARE=true; [ "${2:-}" = game ] && SHARE=false
 pids=()
 cleanup() { for p in "${pids[@]}"; do kill $p 2>/dev/null; done; sleep 1; for p in "${pids[@]}"; do kill -9 $p 2>/dev/null; done; for n in ptsend ptrecv ptclock; do for p in $(pgrep -x $n); do kill $p 2>/dev/null; done; done; }
 trap cleanup EXIT
@@ -43,7 +47,7 @@ sleep 1
 DISPLAY=:97 $R/helper/bin/ptclock -busy -pattern shapes -noise 128 -w 2560 -h 1440 >/dev/null 2>&1 & pids+=($!)
 cd $R/app
 ERIS_FAKE_MEDIA=1 ERIS_AUTO_SHARE=1 ERIS_PROFILE=e2e-host DISPLAY=:97 npx electron . --no-sandbox --disable-gpu \
-  --auto="{\"join\":{\"link\":\"$LINK\",\"name\":\"Host\",\"ownerCode\":\"$CODE\"},\"say\":\"hello from Host\",\"expect\":\"hello from Player\",\"voice\":true,\"camera\":true,\"share\":true,\"live\":true,\"testWith\":\"Player\",\"seconds\":$SECS$HOSTX}" \
+  --auto="{\"join\":{\"link\":\"$LINK\",\"name\":\"Host\",\"ownerCode\":\"$CODE\"},\"say\":\"hello from Host\",\"expect\":\"hello from Player\",\"voice\":true,\"camera\":true,\"share\":$SHARE,\"live\":true,\"testWith\":\"Player\",\"seconds\":$SECS$HOSTX}" \
   > $T/app-host.log 2>&1 & pids+=($!)
 sleep 2
 ERIS_FAKE_MEDIA=1 ERIS_PROFILE=e2e-player DISPLAY=:98 npx electron . --no-sandbox --disable-gpu \
@@ -68,14 +72,28 @@ echo "== voice: $heard of 2 hear the other; cameras: $seen of 2 see the other"
 optin=$(cat $T/logs-player/app.log 2>/dev/null | grep -c "share offered; received before Watch: false")
 watched=$(cat $T/logs-player/app.log 2>/dev/null | grep -c "auto test: watching")
 echo "== screen share: nothing received before Watch: $optin of 1; watched: $watched of 1"
+gameok=1
+if [ "${2:-}" = game ]; then
+  # Its sound can't come in a test (fake devices hide the capture's device).
+  game=$(cat $T/logs-player/app.log 2>/dev/null | grep -c "auto test: watching Host's game")
+  echo "== game shared for spectators and watched: $game of 1"
+  [ "$game" -ge 1 ] || gameok=0
+fi
+# Play Together's game sound (Linux hosts with PipeWire): the host sent it,
+# the player decoded it (and, being a test, played it nowhere).
+sndhost=$(cat $T/data/tests/*-host-*.json 2>/dev/null | grep -c '"game_sound": *"on"')
+sndpkts=$(cat $T/data/tests/*-player-*.json 2>/dev/null | grep -oE '"sound_packets": *[0-9]+' | grep -oE '[0-9]+$' | head -1)
+echo "== game sound: host sending: $sndhost of 1; packets the player decoded: ${sndpkts:-0}"
+sndok=1
+if command -v pactl >/dev/null && { [ "$sndhost" -lt 1 ] || [ "${sndpkts:-0}" -lt 100 ]; }; then sndok=0; fi
 sleep 12 # the apps send diagnostics every 10 s
 diagfiles=$(ls $T/data/logs/diag-*.jsonl 2>/dev/null | wc -l)
 voicediag=$(cat $T/data/logs/diag-*.jsonl 2>/dev/null | grep -c '"kind":"voice"')
 echo "== diagnostics: files for $diagfiles of 2 members; voice stats entries: $voicediag"
-if [ "$n" -ge 2 ] && [ "$chat" -ge 2 ] && [ "$heard" -ge 2 ] && [ "$seen" -ge 2 ] && [ "$optin" -ge 1 ] && [ "$watched" -ge 1 ] && [ "$diagfiles" -ge 2 ] && [ "$voicediag" -ge 2 ]; then
+if [ "$n" -ge 2 ] && [ "$chat" -ge 2 ] && [ "$heard" -ge 2 ] && [ "$seen" -ge 2 ] && [ "$optin" -ge 1 ] && [ "$watched" -ge 1 ] && [ "$diagfiles" -ge 2 ] && [ "$voicediag" -ge 2 ] && [ "$sndok" = 1 ] && [ "$gameok" = 1 ]; then
   echo "PASS"
   rm -rf "$T" # the logs are only kept when it fails
 else
-  echo "FAIL: expected both sides' results, both chat messages, voice and cameras both ways, an opt-in screen share watched, and both apps' diagnostics"
+  echo "FAIL: expected both sides' results, both chat messages, voice and cameras both ways, an opt-in screen share watched, game sound, and both apps' diagnostics"
   exit 1
 fi

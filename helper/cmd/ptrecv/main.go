@@ -219,6 +219,12 @@ func main() {
 			log.Fatal(err)
 		}
 	}
+	if *playSound {
+		if _, err := pc.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio,
+			webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionRecvonly}); err != nil {
+			log.Fatal(err)
+		}
+	}
 	unordered, noResend := false, uint16(0)
 	dc, err := pc.CreateDataChannel("input", &webrtc.DataChannelInit{Ordered: &unordered, MaxRetransmits: &noResend})
 	if err != nil {
@@ -254,6 +260,10 @@ func main() {
 	r.wake = sdl.RegisterEvents(1)
 	r.rx = make(chan rxPacket, 4096)
 	pc.OnTrack(func(t *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
+		if t.Kind() == webrtc.RTPCodecTypeAudio {
+			go playTrack(t)
+			return
+		}
 		if t.Codec().MimeType == sig.FECCodec.MimeType {
 			go r.readTrack(t, true)
 			return
@@ -527,6 +537,7 @@ func (r *receiver) summary(all *run, secs float64, text string) map[string]any {
 		"picture":           fmt.Sprintf("%dx%d", r.picW, r.picH),
 		"text":              text,
 	}
+	soundSummary(m)
 	if r.asm != nil {
 		m["packets_rebuilt"] = r.asm.Cnt.RebuiltPkts.Load() - r.asm.Cnt.Ahead.Load()
 	}
