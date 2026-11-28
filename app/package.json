@@ -1,7 +1,7 @@
 {
   "name": "eris",
   "productName": "Eris",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Eris: self-hosted voice, chat and low-latency game streaming",
   "main": "main/main.js",
   "type": "commonjs",
