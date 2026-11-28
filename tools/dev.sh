@@ -2,8 +2,12 @@
 # Eris dev build: the code in this folder (committed or not), run next to
 # the installed Eris so changes can be tried before a release.
 #
-#   tools/dev.sh            build, start a dev server and a dev app
-#   tools/dev.sh --fresh    the same, with a fresh copy of the real server's data
+#   tools/dev.sh                 build this folder (committed or not), start a
+#                                dev server and a dev app
+#   tools/dev.sh BRANCH          the same with a branch's latest commit, e.g.
+#                                master (released code) or next (development),
+#                                built from a snapshot in .worktrees/BRANCH
+#   tools/dev.sh --fresh [...]   with a fresh copy of the real server's data
 #
 # Nothing of the real setup is touched: the dev app keeps its own server list
 # and logs (~/.config/Eris-dev), and the dev server runs on this PC only
@@ -17,7 +21,15 @@ set -euo pipefail
 # The whole script is read before any of it runs (the braces), so editing
 # this file while a dev session is open can't make the open one misbehave.
 {
-R=$(cd "$(dirname "$0")/.." && pwd)
+REPO=$(cd "$(dirname "$0")/.." && pwd)
+FRESH=""
+BRANCH="."
+for a in "$@"; do
+  case "$a" in
+    --fresh) FRESH=1 ;;
+    *) BRANCH="$a" ;;
+  esac
+done
 LIVE_DATA="$HOME/.config/Eris-server/server-data"
 DEV="$HOME/.config/Eris-server-dev"
 APPDEV="$HOME/.config/Eris-dev"
@@ -29,7 +41,27 @@ NODE_DIR=$(ls -d "$HOME"/.nvm/versions/node/v*/bin 2>/dev/null | sort -V | tail 
 [ -n "$NODE_DIR" ] && PATH="$NODE_DIR:$PATH"
 echo "== Node $(node --version), Go $(go version | awk '{print $3}')"
 
-if [ "${1:-}" = --fresh ] || [ ! -d "$DEV/data" ]; then
+# Which code: this folder, or a snapshot of a branch's latest commit.
+if [ "$BRANCH" = . ]; then
+  R="$REPO"
+  echo "== code: this folder ($(git -C "$REPO" branch --show-current), with any uncommitted changes)"
+else
+  R="$REPO/.worktrees/$BRANCH"
+  if [ -d "$R" ]; then
+    git -C "$R" checkout -q --detach "$BRANCH"
+  else
+    git -C "$REPO" worktree add -q --detach "$R" "$BRANCH"
+  fi
+  echo "== code: $BRANCH at $(git -C "$R" log -1 --format='%h %s')"
+  # Its own node_modules, made again when its package-lock.json changes.
+  LOCK=$(sha256sum "$R/app/package-lock.json" | cut -c1-16)
+  if [ "$(cat "$R/app/node_modules/.eris-lock" 2>/dev/null)" != "$LOCK" ]; then
+    echo "== installing the app's packages for $BRANCH (first time, or they changed)"
+    (cd "$R/app" && npm ci --no-audit --no-fund >/dev/null 2>&1) && echo "$LOCK" >"$R/app/node_modules/.eris-lock"
+  fi
+fi
+
+if [ -n "$FRESH" ] || [ ! -d "$DEV/data" ]; then
   rm -rf "$DEV/data"
   mkdir -p "$DEV"
   if [ -d "$LIVE_DATA" ]; then
@@ -77,9 +109,12 @@ failed() {
   exit 1
 }
 # The dev app's Host view looks after the dev server (app/main/host.js).
-printf '{\n  "data": "%s",\n  "addr": "127.0.0.1:%s",\n  "public": ""\n}\n' "$DEV/data" "$PORT" >"$DEV/host.json"
+# Voice uses its own UDP port (7311), so the real server's (7301) is free.
+printf '{\n  "data": "%s",\n  "addr": "127.0.0.1:%s",\n  "public": "",\n  "media_port": 7311\n}\n' "$DEV/data" "$PORT" >"$DEV/host.json"
 echo "== building the dev build"
-(cd "$R/server" && go build -o bin/eris-server .) || failed
+(cd "$R/server" && go build -o bin/eris-server.new . && mv -f bin/eris-server.new bin/eris-server) || failed
+# LiveKit beside the dev server, for voice and cameras.
+LK=$("$REPO/tools/livekit.sh" linux) && cp -f "$LK" "$R/server/bin/livekit-server.new" && mv -f "$R/server/bin/livekit-server.new" "$R/server/bin/livekit-server" || echo "== (no LiveKit: voice is off in this dev build)"
 (cd "$R/helper" && go build -o bin/ ./cmd/...) || failed
 (cd "$R/app" && npx vite build >"$APPDEV/build.log" 2>&1) || { cat "$APPDEV/build.log"; failed; }
 
@@ -87,7 +122,7 @@ echo "== dev server on 127.0.0.1:$PORT"
 CTL="$DEV/ctl"
 rm -f "$CTL"
 mkfifo "$CTL"
-"$R/server/bin/eris-server" -exit-with-stdin -addr "127.0.0.1:$PORT" -data "$DEV/data" <"$CTL" 2>&1 | tee -a "$DEV/server.log" &
+"$R/server/bin/eris-server" -exit-with-stdin -addr "127.0.0.1:$PORT" -media-port 7311 -data "$DEV/data" <"$CTL" 2>&1 | tee -a "$DEV/server.log" &
 exec 3>"$CTL" # held open: the dev server runs until this closes
 stop() {
   echo stop >&3 2>/dev/null || true

@@ -5,6 +5,7 @@
   // and editing or deleting your own messages. A private room you can't go
   // in asks for its password, or says it's for listed members.
   import { tick } from 'svelte'
+  import { voice, attach } from './voice.svelte.js'
 
   let { conn, room } = $props()
 
@@ -161,7 +162,25 @@
     <span class="mark">{room.private ? (room.access ? '🔓' : '🔒') : '#'}</span>
     <h2>{room.name}</h2>
     {#if room.private}<span class="muted">{room.private === 'password' ? 'private, with a password' : 'private, for listed members'}</span>{/if}
+    <span class="grow"></span>
+    {#if conn.voiceOn && room.access}
+      {#if voice.isIn(conn, room.id)}
+        <span class="invoice">In this room's voice</span>
+      {:else}
+        <button class="primary joinvoice" onclick={() => voice.join(conn, room.id)}>Join voice</button>
+      {/if}
+    {/if}
   </header>
+  {#if voice.isIn(conn, room.id) && voice.tiles.length}
+    <div class="tiles">
+      {#each voice.tiles as t (t.id + (t.local ? '-me' : ''))}
+        <div class="tile" class:me={t.local}>
+          <div class="video" use:attach={t.track}></div>
+          <span class="tname">{t.name}{t.local ? ' (you)' : ''}</span>
+        </div>
+      {/each}
+    </div>
+  {/if}
 
   {#if !room.access}
     <div class="locked">
@@ -252,6 +271,14 @@
 <style>
   .chat { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }
   header { display: flex; align-items: baseline; gap: 8px; padding: 12px 18px; border-bottom: 1px solid var(--border); }
+  .grow { flex: 1; }
+  .invoice { color: var(--good); font-size: 12px; font-weight: 600; }
+  .joinvoice { padding: 4px 12px; font-size: 13px; }
+  .tiles { display: flex; gap: 8px; padding: 10px 18px; border-bottom: 1px solid var(--border); overflow-x: auto; background: #10101f; }
+  .tile { position: relative; width: 240px; aspect-ratio: 16 / 9; background: #000; border-radius: var(--radius); overflow: hidden; flex: none; }
+  .tile :global(video) { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .tile.me :global(video) { transform: scaleX(-1); }
+  .tname { position: absolute; left: 6px; bottom: 6px; background: rgba(0, 0, 0, 0.6); padding: 1px 6px; border-radius: 4px; font-size: 12px; }
   header h2 { margin: 0; font-size: 16px; text-transform: none; letter-spacing: 0; color: var(--text); }
   .mark { color: var(--muted); }
   .messages { flex: 1; overflow-y: auto; padding: 8px 18px 12px; }

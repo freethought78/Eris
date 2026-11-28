@@ -44,6 +44,7 @@ var (
 	noAuto  = flag.Bool("no-auto-update", false, "only say when a newer server is out; don't install it and restart by itself")
 	every   = flag.Duration("update-every", time.Hour, "how often to check for a newer server")
 	showVer = flag.Bool("version", false, "print the version and exit")
+	media   = flag.Int("media-port", 7301, "UDP port for voice and cameras (LiveKit's media)")
 	owned   = flag.Bool("exit-with-stdin", false, "stop when stdin closes or reads \"stop\" (run by the Eris server dashboard, so the server never outlives it)")
 )
 
@@ -70,6 +71,7 @@ func main() {
 	if err != nil {
 		fatal("data folder %s: %v", dir, err)
 	}
+	program, _ = thisProgram()
 	hub := newHub(store)
 	ctl := &control{started: time.Now(), dataDir: dir, stop: make(chan string, 1), restart: make(chan string, 1),
 		ask: make(chan struct{}, 1), checking: !*noCheck}
@@ -87,6 +89,9 @@ func main() {
 	if err := ctl.writeControlToken(); err != nil {
 		fatal("control token: %v", err)
 	}
+	lk := startLiveKit(dir, *media, *public)
+	hub.lk = lk
+	voiceRoutes(mux, store, lk)
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second,
 		TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}}
 	plain := &http.Server{Handler: plainHandler(infoHandler(store)), ReadHeaderTimeout: 10 * time.Second}
@@ -112,7 +117,6 @@ func main() {
 
 	// Updates: a newer release is installed in place of this program, and
 	// the server restarts into it when nobody is streaming.
-	program, _ = thisProgram()
 	install := !*noAuto
 	if from := os.Getenv("ERIS_UPDATED_FROM"); from != "" {
 		os.Unsetenv("ERIS_UPDATED_FROM")
@@ -180,6 +184,7 @@ func main() {
 	shutdown := func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		hub.closeAll()
+		lk.stop()
 		_ = srv.Shutdown(ctx)
 		_ = plain.Shutdown(ctx)
 		ln.Close()
@@ -190,6 +195,7 @@ func main() {
 	select {
 	case err := <-served:
 		ctl.removeControlToken()
+		lk.stop()
 		fatal("%v", err)
 	case why := <-ctl.stop:
 		shutdown()

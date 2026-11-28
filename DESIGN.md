@@ -205,7 +205,11 @@ server/rooms.go; app/src/lib/Chat.svelte). Messages and files travel encrypted (
 ### 4.4 Voice in rooms
 
 Join and leave, mute, deafen, push-to-talk with a global hotkey (works while a game has
-focus), speaking indicators, per-person volume, cameras. Voice uses the microphone through
+focus), speaking indicators, per-person volume, cameras. *Built 2026-11-27, except
+push-to-talk (later, by the user's choice):* LiveKit 1.13 run by eris-server
+(server/voice.go), livekit-client in the app (app/src/lib/voice.svelte.js), who's in each
+room's voice under the room, a voice bar (mute, deafen, camera, leave), camera tiles above
+the chat, and device settings. Voice uses the microphone through
 Electron with echo cancellation and noise suppression on.
 
 ---

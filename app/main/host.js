@@ -30,7 +30,7 @@ function settings() {
       break
     } catch {}
   }
-  const out = { data: s?.data || file('server-data'), addr: s?.addr || ':7300', public: s?.public || '' }
+  const out = { data: s?.data || file('server-data'), addr: s?.addr || ':7300', public: s?.public || '', ...(s?.media_port ? { media_port: s.media_port } : {}) }
   if (!fs.existsSync(file('host.json'))) {
     fs.mkdirSync(hostDir(), { recursive: true })
     fs.writeFileSync(file('host.json'), JSON.stringify(out, null, 2) + '\n')
@@ -70,6 +70,13 @@ function carriedServer() {
   return path.join(__dirname, '..', '..', 'server', 'bin', exe)
 }
 
+function put(from, to) {
+  fs.mkdirSync(path.dirname(to), { recursive: true })
+  fs.copyFileSync(from, to + '.new')
+  fs.chmodSync(to + '.new', 0o755)
+  fs.renameSync(to + '.new', to)
+}
+
 // serverToRun: from the source folder, its build; otherwise the updatable
 // copy, refreshed from the app's own server when that's newer.
 function serverToRun() {
@@ -78,12 +85,11 @@ function serverToRun() {
   const exe = file(path.join('bin', path.basename(carried)))
   const have = versionOf(exe)
   const offered = versionOf(carried)
-  if (offered && (!have || newer(offered, have))) {
-    fs.mkdirSync(path.dirname(exe), { recursive: true })
-    fs.copyFileSync(carried, exe + '.new')
-    fs.chmodSync(exe + '.new', 0o755)
-    fs.renameSync(exe + '.new', exe)
-  }
+  if (offered && (!have || newer(offered, have))) put(carried, exe)
+  // LiveKit (voice and cameras) goes beside it, when the app's differs.
+  const lk = path.join(path.dirname(carried), path.basename(carried).replace('eris-server', 'livekit-server'))
+  const lkTo = path.join(path.dirname(exe), path.basename(lk))
+  if (fs.existsSync(lk) && (!fs.existsSync(lkTo) || fs.statSync(lk).size !== fs.statSync(lkTo).size)) put(lk, lkTo)
   return exe
 }
 
@@ -189,7 +195,7 @@ async function start() {
   }
   if (!fs.existsSync(exe)) return { ok: false, error: `The server program is missing (${exe}).` }
   fs.mkdirSync(s.data, { recursive: true })
-  const cmd = [exe, '-data', s.data, '-addr', s.addr, ...(s.public ? ['-public', s.public] : [])]
+  const cmd = [exe, '-data', s.data, '-addr', s.addr, ...(s.public ? ['-public', s.public] : []), ...(s.media_port ? ['-media-port', String(s.media_port)] : [])]
   // Not ours to keep: the window's process lives on after the app closes.
   const env = { ...process.env }
   for (const k of ['APPDIR', 'APPIMAGE', 'ARGV0', 'OWD', 'CHROME_DESKTOP', 'ELECTRON_RUN_AS_NODE', 'GDK_BACKEND']) delete env[k]

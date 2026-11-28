@@ -9,3 +9,4 @@ server/bin/
 dist/
 *.log
 *.pid
+.worktrees/

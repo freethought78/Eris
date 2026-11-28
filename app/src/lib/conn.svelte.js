@@ -46,11 +46,13 @@ export class Conn {
   chat = $state({}) // room id -> {messages, loading, done}
   read = $state({}) // room id -> newest message id seen (kept on this PC)
   maxFileMB = $state(100)
+  voice = $state({}) // member id -> the room whose voice they're in
+  voiceOn = $state(false) // the server runs voice
 
   #ws = null
   #retry = null
   #closed = false
-  #handlers = { signal: [], invite: [] }
+  #handlers = { signal: [], invite: [], hello: [] }
 
   constructor(entry) {
     this.entry = entry // {address, token, name, pin}
@@ -256,7 +258,14 @@ export class Conn {
         this.maxFileMB = m.server?.max_file_mb || 100
         this.rooms = m.rooms || []
         this.chat = {} // reloaded when shown: messages may have come and gone while away
+        this.voice = Object.fromEntries((m.voice || []).map((v) => [v.member_id, v.room_id]))
+        this.voiceOn = !!m.server?.voice
         this.loadResults()
+        for (const fn of this.#handlers.hello) fn()
+        break
+      case 'voice':
+        if (m.room_id) this.voice[m.member_id] = m.room_id
+        else delete this.voice[m.member_id]
         break
       case 'rooms':
         this.rooms = m.rooms

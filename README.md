@@ -7,7 +7,7 @@
 ## What that means
 
 - **Rooms, like TeamSpeak.** Everything happens in rooms. Each room has its own text
-  chat (and voice, coming next); there are no direct calls, because a server is already a
+  chat, voice and cameras; there are no direct calls, because a server is already a
   private community. Rooms can be private, by password or by a list of members.
 - **A familiar look, like Discord.** Your servers down the left, the server's rooms, the
   chat in the middle, members on the right. Pictures show in the chat, files can be
@@ -22,8 +22,8 @@
 
 *Not affiliated with Discord, TeamSpeak or Parsec.*
 
-> **Early days.** Eris is at version 0.1. Text chat, files, private rooms, hosting and
-> streaming work; voice, cameras and watching streams in the app come next. Going live is
+> **Early days.** Eris is at version 0.1. Text chat, files, private rooms, voice, cameras,
+> hosting and streaming work; watching streams inside the app and push-to-talk come next. Going live is
 > Linux-only for now (Windows can join and play).
 
 ---
@@ -62,6 +62,18 @@ The first time you open a private room, Eris asks for its password; you only giv
   the chat (click one to see it full size); other files get a *Save* button.
 - Links open in your browser. A dot next to a room means there's something new in it.
 
+## Talking
+
+- **Join a room's voice** by double-clicking the room, or with **Join voice** at the top of
+  its chat (or the speaker that appears when you point at a room). You can read another
+  room's chat while you talk in one.
+- Who's in each room's voice is listed under the room; a green light shows who's speaking.
+- The bar at the bottom of the rooms list has **mute** (🎤), **deafen** (🎧: hear nobody,
+  and mute), **camera** (📷) and **leave** (✕). Cameras show above the room's chat.
+- Click someone's name under the room to change how loud they are (just for you).
+- **⚙** at the bottom right of the rooms list picks your microphone, speakers and camera.
+  Echo cancellation and noise suppression are always on.
+
 ## Hosting your own server
 
 The server comes with the app (Linux for now).
@@ -73,8 +85,9 @@ The server comes with the app (Linux for now).
 2. Copy the **join link** from Host and give it to your friends. The first time, press
    **Join it** yourself: the **owner code** is filled in, and whoever joins with it first
    becomes the owner.
-3. Your friends need to reach your PC: forward **TCP 7300** on your router to it (and, for
-   streaming, **UDP 7401**), or put it in your router's DMZ.
+3. Your friends need to reach your PC: forward **TCP 7300** and, for voice and cameras,
+   **UDP 7301** on your router to it (and, for streaming games, **UDP 7401**), or put it
+   in your router's DMZ.
 
 As owner, the **Server** button at the bottom of the rooms list gives you the server's
 status, log, *Check for updates*, *Restart* and *Stop* from any PC. The **+** next to

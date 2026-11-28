@@ -23,6 +23,7 @@ import (
 //	{"type":"test-invite","to":ID,"test_id":"...","seconds":N}
 //	{"type":"message","room_id":ID,"text":"...","files":["id",...]}
 //	{"type":"edit","id":ID,"text":"..."}  {"type":"delete","id":ID}
+//	{"type":"voice","room_id":ID}  joined that room's voice (0: left voice)
 //	{"type":"room-unlock","id":ID,"password":"..."}
 //	{"type":"room-create","room":{name,private,password,allowed}}  (owner and admins)
 //	{"type":"room-update","id":ID,"room":{...}}  {"type":"room-delete","id":ID}
@@ -37,6 +38,7 @@ import (
 //	{"type":"test-result","result":{...}}
 //	{"type":"message","message":{...}}  {"type":"message-edit","message":{...}}
 //	{"type":"message-delete","id":ID,"room_id":ID}
+//	{"type":"voice","member_id":ID,"room_id":ID}  (0: left), to those who can see the room
 //	{"type":"rooms","rooms":[...]}  (each member's own view: which they can go in)
 //	{"type":"error","error":"..."}
 //
@@ -63,10 +65,14 @@ type Hub struct {
 
 	done     chan struct{} // closed when the server stops
 	doneOnce sync.Once
+
+	voice map[int64]int64 // member id -> the room whose voice they're in
+	lk    *liveKit
 }
 
 func newHub(s *Store) *Hub {
-	return &Hub{store: s, clients: map[int64]map[*client]bool{}, live: map[int64]liveInfo{}, done: make(chan struct{})}
+	return &Hub{store: s, clients: map[int64]map[*client]bool{}, live: map[int64]liveInfo{}, done: make(chan struct{}),
+		voice: map[int64]int64{}}
 }
 
 // liveCount is how many members are streaming.
@@ -140,8 +146,18 @@ func (h *Hub) hello(you Member) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return encode(map[string]any{"type": "hello", "you": you, "members": view, "live": live, "rooms": rooms,
-		"server": map[string]any{"name": st.Name, "version": version, "max_file_mb": st.maxFile() >> 20}}), nil
+	voice := []map[string]int64{}
+	for mid, rid := range h.voice {
+		if h.store.CanAccess(you, rid) {
+			voice = append(voice, map[string]int64{"member_id": mid, "room_id": rid})
+		}
+	}
+	voiceOn := false
+	if h.lk != nil {
+		voiceOn, _ = h.lk.enabled()
+	}
+	return encode(map[string]any{"type": "hello", "you": you, "members": view, "live": live, "rooms": rooms, "voice": voice,
+		"server": map[string]any{"name": st.Name, "version": version, "max_file_mb": st.maxFile() >> 20, "voice": voiceOn}}), nil
 }
 
 func (h *Hub) add(c *client) {
@@ -162,11 +178,17 @@ func (h *Hub) remove(c *client) {
 	delete(h.clients[c.m.ID], c)
 	last := len(h.clients[c.m.ID]) == 0
 	_, wasLive := h.live[c.m.ID]
+	voiceRoom := int64(0)
 	if last {
 		delete(h.clients, c.m.ID)
 		delete(h.live, c.m.ID)
+		voiceRoom = h.voice[c.m.ID]
+		delete(h.voice, c.m.ID)
 	}
 	h.mu.Unlock()
+	if voiceRoom != 0 {
+		h.toRoom(voiceRoom, encode(map[string]any{"type": "voice", "member_id": c.m.ID, "room_id": 0}))
+	}
 	if last {
 		if wasLive {
 			h.broadcast(encode(map[string]any{"type": "live", "member_id": c.m.ID, "on": false}))
@@ -192,6 +214,28 @@ type inMsg struct {
 	Files    []string     `json:"files"`
 	Password string       `json:"password"`
 	Room     RoomSettings `json:"room"`
+}
+
+// setVoice notes that m is in a room's voice (roomID 0: in none), and tells
+// those who can see that room.
+func (h *Hub) setVoice(m Member, roomID int64) {
+	if roomID != 0 && (!h.store.roomExists(roomID) || !h.store.CanAccess(m, roomID)) {
+		return
+	}
+	h.mu.Lock()
+	old := h.voice[m.ID]
+	if roomID == 0 {
+		delete(h.voice, m.ID)
+	} else {
+		h.voice[m.ID] = roomID
+	}
+	h.mu.Unlock()
+	if old != 0 && old != roomID {
+		h.toRoom(old, encode(map[string]any{"type": "voice", "member_id": m.ID, "room_id": 0}))
+	}
+	if roomID != 0 && old != roomID {
+		h.toRoom(roomID, encode(map[string]any{"type": "voice", "member_id": m.ID, "room_id": roomID}))
+	}
 }
 
 // toRoom sends msg to every connected member who can go in the room.
@@ -309,6 +353,8 @@ func (h *Hub) handle(c *client, in inMsg) {
 		h.toMember(in.To, encode(map[string]any{"type": "test-invite", "from": c.m.ID, "test_id": in.TestID, "seconds": in.Seconds}))
 	case "ping":
 		c.send <- encode(map[string]any{"type": "pong"})
+	case "voice":
+		h.setVoice(c.m, in.RoomID)
 	case "message", "edit", "delete", "room-unlock", "room-create", "room-update", "room-delete":
 		h.chat(c, in)
 	}

@@ -64,6 +64,17 @@ doesn't check at all; `eris-server -update` updates by hand and exits;
 `ERIS_RELEASES_API` points it at another release page (also turns checking
 on in a dev build).
 
+**Voice and cameras** (`voice.go`, DESIGN.md 4.4): the server runs LiveKit
+(`livekit-server`, which must sit next to the program; the Linux app puts it
+there, and `tools/livekit.sh` fetches the pinned version), with keys made on
+first run (`livekit.json`), a config written at each start (`livekit.yaml`)
+and its log in `livekit.log`, all in the data folder. Its signalling goes
+through this server's port (`/rtc`); the audio and video use one UDP port,
+`-media-port` (7301). `POST /api/rooms/{id}/voice` gives a member who may go
+in the room a LiveKit token for its voice; who's in which voice goes over the
+live connection. LiveKit stops with the server, even if the server is killed.
+Without `livekit-server`, voice is off and everything else works.
+
 **Its window:** run in a terminal (the app starts it in one: see "Hosting a
 server" in app/README.md), it shows the join link, a status line that changes
 with who's online, who's streaming and updates, the window's title (online

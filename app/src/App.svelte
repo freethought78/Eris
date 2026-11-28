@@ -10,6 +10,8 @@
   import Members from './lib/Members.svelte'
   import RoomDialog from './lib/RoomDialog.svelte'
   import ServerPanel from './lib/ServerPanel.svelte'
+  import DeviceSettings from './lib/DeviceSettings.svelte'
+  import { voice } from './lib/voice.svelte.js'
   import { httpBase } from './lib/conn.svelte.js'
   import logo from '../build/icon.svg'
 
@@ -25,11 +27,13 @@
   let roomSel = $state({}) // server address -> the room shown
   let view = $state('chat') // chat or tests
   let roomDialog = $state(null) // {room} while adding or changing a room
+  let deviceSettings = $state(false)
   let room = $derived(conn ? conn.rooms.find((r) => r.id === roomSel[conn.entry.address]) || conn.rooms[0] : null)
 
   function connect(entry) {
     const c = new Conn(entry)
     stream.attach(c)
+    c.on('hello', () => voice.rejoined(c))
     conns[entry.address] = c
     return c
   }
@@ -108,6 +112,20 @@
       if (a.expect) {
         await until(() => c.chat[r.id]?.messages.some((m) => m.text === a.expect && m.files.length === 2))
         console.info(`auto test: got "${a.expect}" with its file`)
+      }
+    }
+    if (a.voice) {
+      // Voice and cameras: join the first room's voice, and wait to hear
+      // (and, with camera, see) the other copy.
+      await until(() => c.rooms.length > 0)
+      await voice.join(c, c.rooms[0].id)
+      if (voice.error) console.error('auto test: voice:', voice.error)
+      if (a.camera) await voice.toggleCamera()
+      await until(() => voice.hearing > 0)
+      console.info(`auto test: hearing ${voice.people.filter((p) => !p.local).map((p) => p.name).join(', ')}`)
+      if (a.camera) {
+        await until(() => voice.tiles.some((t) => !t.local))
+        console.info(`auto test: seeing ${voice.tiles.filter((t) => !t.local).map((t) => t.name).join(', ')}`)
       }
     }
     if (a.live) stream.goLive(c, { extraArgs: a.hostArgs })
@@ -274,6 +292,7 @@
           onselect={(id) => ((roomSel[conn.entry.address] = id), (view = 'chat'))}
           onedit={(r) => (roomDialog = { room: r })}
           oncreate={() => (roomDialog = { room: null })}
+          onsettings={() => (deviceSettings = true)}
         />
         {#if view === 'server' && conn.you?.role === 'owner'}
           {#key conn.entry.address}
@@ -294,6 +313,10 @@
     </div>
   {/if}
 </div>
+
+{#if deviceSettings}
+  <DeviceSettings onclose={() => (deviceSettings = false)} />
+{/if}
 
 {#if roomDialog}
   <RoomDialog {conn} room={roomDialog.room} onclose={() => (roomDialog = null)} />

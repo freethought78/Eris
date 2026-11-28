@@ -15,6 +15,13 @@ const linuxInstall = require('./linux-install')
 // and exits: for a desktop shortcut that starts the server without the app.
 const serverMode = process.argv.includes('--server')
 
+// Automated tests: Chromium's fake microphone (a tone) and camera (a test
+// picture), with no permission prompts.
+if (process.env.ERIS_FAKE_MEDIA) {
+  app.commandLine.appendSwitch('use-fake-device-for-media-stream')
+  app.commandLine.appendSwitch('use-fake-ui-for-media-stream')
+}
+
 // ERIS_PROFILE=name keeps a separate server list and logs, so two copies can
 // run on one PC (for testing).
 if (process.env.ERIS_PROFILE) {
