@@ -48,11 +48,13 @@
 </div>
 
 <style>
-  .devices { display: grid; gap: 22px; max-width: 460px; }
+  /* Only as tall as its contents: in Settings' full-height area the grid
+     otherwise spread the extra height over its rows, stretching the menus
+     and leaving each title nearer the menu above (Dev Notes). */
+  .devices { display: grid; gap: 22px; max-width: 460px; align-content: start; align-self: start; flex: 1; }
   h2 { margin: 0; font-size: 18px; text-transform: none; letter-spacing: 0; color: var(--text); }
   /* Each title sits right on top of its own menu, well apart from the one above. */
-  label { display: grid; gap: 6px; font-size: 13px; font-weight: 600; }
-  select { font-weight: 400; }
-  select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 8px; }
+  label { display: grid; gap: 6px; align-content: start; font-size: 13px; font-weight: 600; }
+  select { font: inherit; font-weight: 400; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 8px; }
   .small { font-size: 12px; margin: 0; }
 </style>

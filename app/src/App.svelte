@@ -105,6 +105,7 @@
   // Automated tests start the app with --auto='{...}' (see app/README.md).
   async function runAuto(a) {
     console.info(`auto test: Eris ${info.version}`, JSON.stringify(a))
+    if (a.settings) settings = a.settings // open a Settings section (for screenshots)
     if (a.update) {
       // Accept an update as soon as one is offered (testing updates).
       window.eris.checkUpdate()
