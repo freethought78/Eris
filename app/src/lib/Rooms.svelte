@@ -65,7 +65,7 @@
         {#if l && !l.local}
           <button class="who" title="Their volume" onclick={() => (volumeFor = volumeFor === m.id ? null : m.id)}>{m.name}</button>
         {:else}
-          <span class="who">{m.name}{m.id === conn.you?.id ? ' (you)' : ''}</span>
+          <span class="who">{m.name}{m.id === conn.you?.id ? ' (You)' : ''}</span>
         {/if}
         {#if l?.muted}<span class="icon" title="Muted"><MicOff size={13} /></span>{/if}
         {#if l?.camera}<span class="icon" title="Camera on"><Video size={13} /></span>{/if}

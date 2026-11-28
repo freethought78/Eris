@@ -59,6 +59,7 @@
   $effect(() => {
     voice.setGameShare(stream.live && !!stream.hostConn && voice.conn === stream.hostConn && !!voice.state && voice.state !== 'connecting')
   })
+  const cap = (w) => (w ? w[0].toUpperCase() + w.slice(1) : w)
   let room = $derived(conn ? conn.rooms.find((r) => r.id === roomSel[conn.entry.address]) || conn.rooms[0] : null)
 
   function connect(entry) {
@@ -90,6 +91,9 @@
   }
 
   async function remove(address) {
+    const name = conns[address]?.serverName || servers.find((s) => s.address === address)?.name || 'this server'
+    const owner = conns[address]?.you?.role === 'owner'
+    if (!confirm(`Remove ${name} from your server list?\n\nThis PC forgets your membership: to come back you need its join link, and you join as a new member${owner ? ' (without your owner rights)' : ''}.`)) return
     if (conns[address]) diag.detach(conns[address])
     conns[address]?.close()
     delete conns[address]
@@ -164,6 +168,8 @@
       if (a.camera) await voice.toggleCamera()
       await until(() => voice.hearing > 0)
       console.info(`auto test: hearing ${voice.people.filter((p) => !p.local).map((p) => p.name).join(', ')}`)
+      await until(() => voice.people.some((p) => !p.local && p.speaking))
+      console.info(`auto test: speaking light on for ${voice.people.filter((p) => !p.local && p.speaking).map((p) => p.name).join(', ')}`)
       if (a.camera) {
         await until(() => voice.tiles.some((t) => !t.local))
         console.info(`auto test: seeing ${voice.tiles.filter((t) => !t.local).map((t) => t.name).join(', ')}`)
@@ -312,10 +318,10 @@
       <header>
         <div class="title">
           <h1>{conn.serverName || conn.entry.address}{#if info.dev}<span class="devtag" title="Built from the source folder (tools/dev.sh), not a release">DEV</span>{/if}</h1>
-          <span class="muted">you are {conn.you?.name || conn.entry.name}{conn.you?.role === 'owner' ? ' (owner)' : ''} · {conn.status}{conn.serverVersion ? ` · server ${conn.serverVersion}` : ''} · app {info.version}</span>
+          <span class="muted">You are {conn.you?.name || conn.entry.name}{conn.you?.role === 'owner' ? ' (Owner)' : ''} · {cap(conn.status)}{conn.serverVersion ? ` · Server ${conn.serverVersion}` : ''} · App {info.version}</span>
         </div>
         <div class="actions">
-          <button onclick={() => remove(conn.entry.address)} title="Remove this server from the list">Remove</button>
+          <button class="danger" onclick={() => remove(conn.entry.address)} title="Takes this server off your list and forgets your membership on this PC">Remove server</button>
         </div>
       </header>
 

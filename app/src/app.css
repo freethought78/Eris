@@ -23,6 +23,8 @@ button {
 button:hover:not(:disabled) { filter: brightness(1.25); }
 button:disabled { opacity: 0.5; cursor: default; }
 button.primary { background: var(--highlight); border-color: var(--highlight); }
+/* Removing or deleting something: red outline and text. */
+button.danger { background: none; border-color: var(--highlight); color: var(--highlight); }
 input {
   font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 6px 8px; width: 100%;

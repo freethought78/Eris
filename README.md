@@ -55,12 +55,19 @@ you say so.
 
 The first time you open a private room, Eris asks for its password; you only give it once.
 
+**Remove server** (at the top, red) takes a server off your list and forgets your
+membership on this PC: to come back you need its join link, and you join as a new member.
+
 ## Chatting
 
 - **Enter** sends, **Shift+Enter** starts a new line, **Up** edits your last message.
-- Attach files with the **+** button, by dragging them in, or by pasting: they're sent
-  straight away (with anything you've typed). Pictures show in the chat (click one to see
-  it full size), audio and videos play in it, and other files get a *Save* button.
+- Attach files with the **+** button, by dragging them in, or by pasting (Ctrl+V, or
+  right-click and **Paste**): pictures, and files copied in your file manager. They're
+  sent straight away (with anything you've typed). Pictures show in the chat (click one to
+  see it full size), audio and videos play in it, and other files get a *Save* button.
+- **Right-click** in a text box for cut, copy, paste and spelling suggestions (or to add a
+  word to the dictionary); elsewhere to copy text, links and pictures.
+- What you've typed but not sent stays with its room while you look at another.
 - Links open in your browser. A dot next to a room means there's something new in it.
 
 ## Talking, cameras and sharing your screen
@@ -68,7 +75,8 @@ The first time you open a private room, Eris asks for its password; you only giv
 - **Join a room's voice** by double-clicking the room, or with **Join voice** at the top of
   its chat (or the speaker that appears when you point at a room). You can read another
   room's chat while you talk in one.
-- Who's in each room's voice is listed under the room; a green light shows who's speaking.
+- Who's in each room's voice is listed under the room; a green light shows who's speaking
+  (measured on your PC, so it follows their voice straight away).
 - The panel at the bottom of the rooms list has **mute**, **deafen** (hear nobody, and
   mute), **camera**, **share your screen** and **leave** (point at a button for its name).
   Cameras and shares show above the room's chat: click one to make it big, drag the bar

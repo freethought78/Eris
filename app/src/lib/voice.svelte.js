@@ -49,6 +49,11 @@ class Voice {
   devices = $state(store.get('devices', {})) // audioinput, audiooutput, videoinput -> device id
 
   #room = null
+  // Who's speaking, measured here from each voice's own sound (see #meter).
+  #meterCtx = null
+  #meters = new Map() // track sid -> {id, an, buf, src, last}
+  #meterTimer = 0
+  #talking = new Set() // identities lit now
   #gameWanted = false // we're live for Play Together in this call
   #gameDeclined = false // ...but its share was stopped by hand
   #gameTracks = [] // the game share's video and sound
@@ -92,11 +97,12 @@ class Voice {
       .on(RoomEvent.TrackUnsubscribed, (track) => this.#unsubscribed(track))
       .on(RoomEvent.ParticipantConnected, () => this.#refresh())
       .on(RoomEvent.ParticipantDisconnected, () => this.#refresh())
-      .on(RoomEvent.ActiveSpeakersChanged, () => this.#refresh())
       .on(RoomEvent.TrackMuted, () => this.#refresh())
-      .on(RoomEvent.TrackUnmuted, () => this.#refresh())
-      .on(RoomEvent.LocalTrackPublished, () => this.#refresh())
-      .on(RoomEvent.LocalTrackUnpublished, () => this.#refresh())
+      .on(RoomEvent.TrackUnmuted, () => (this.#meterMic(), this.#refresh()))
+      .on(RoomEvent.LocalTrackPublished, () => (this.#meterMic(), this.#refresh()))
+      .on(RoomEvent.LocalTrackUnpublished, () => (this.#meterMic(), this.#refresh()))
+      // Unmuting or another microphone can mean a new track to measure.
+      .on(RoomEvent.ActiveDeviceChanged, () => this.#meterMic())
       .on(RoomEvent.Reconnecting, () => (this.state = 'reconnecting'))
       .on(RoomEvent.Reconnected, () => ((this.state = 'connected'), this.#refresh()))
       .on(RoomEvent.Disconnected, () => {
@@ -386,13 +392,30 @@ class Voice {
     return this.volumes[id] ?? 1
   }
 
+  // listDevices: each device once. The system lists some twice or more:
+  // Windows adds "Default - X" and "Communications - X" entries for devices
+  // also listed as X, and PipeWire can list one device under several
+  // profiles with the same name. The default entry stays, named for what it
+  // is; the others are kept once per name.
   async listDevices() {
     const out = {}
     for (const kind of ['audioinput', 'audiooutput', 'videoinput']) {
+      let list = []
       try {
-        out[kind] = await Room.getLocalDevices(kind, true)
-      } catch {
-        out[kind] = []
+        list = await Room.getLocalDevices(kind, true)
+      } catch {}
+      const seen = new Set()
+      out[kind] = []
+      for (const d of list) {
+        if (d.deviceId === 'communications') continue
+        if (d.deviceId === 'default') {
+          const of = d.label.replace(/^Default\s*-\s*/i, '')
+          out[kind].push({ deviceId: 'default', label: of && of !== d.label ? `System default (${of})` : 'System default' })
+          continue
+        }
+        if (seen.has(d.label)) continue
+        seen.add(d.label)
+        out[kind].push({ deviceId: d.deviceId, label: d.label })
       }
     }
     return out
@@ -425,6 +448,7 @@ class Voice {
   }
 
   #subscribed(track, pub, p) {
+    if (track.kind === Track.Kind.Audio && pub.source === Track.Source.Microphone) this.#meter(track.sid, p.identity, track.mediaStreamTrack)
     if (track.kind === Track.Kind.Audio) {
       if (this.#ctx && track.setWebAudioPlugins) {
         // A limiter: leaves normal speech alone, holds peaks below clipping.
@@ -447,6 +471,7 @@ class Voice {
   }
 
   #unsubscribed(track) {
+    this.#unmeter(track.sid)
     const el = this.#audio.get(track.sid)
     if (el) {
       track.detach(el)
@@ -455,6 +480,61 @@ class Voice {
       this.hearing = this.#audio.size
     }
     this.#refresh()
+  }
+
+  // The green light: LiveKit's own detection runs on the server, from levels
+  // the apps report, about twice a second and smoothed, so the light lagged,
+  // dropped between words and missed quiet speech (Dev Notes). Instead each
+  // voice (ours too) is measured here, 20 times a second: lit above -50 dB
+  // and for 300 ms after, so it doesn't flicker between words. Only
+  // microphones count, not a share's sound; a muted mic is silent.
+  #meter(sid, id, mst) {
+    if (!mst) return
+    this.#unmeter(sid)
+    try {
+      if (!this.#meterCtx) this.#meterCtx = new AudioContext()
+      const src = this.#meterCtx.createMediaStreamSource(new MediaStream([mst]))
+      const an = this.#meterCtx.createAnalyser()
+      an.fftSize = 1024
+      src.connect(an)
+      this.#meters.set(sid, { id, an, src, mst, buf: new Float32Array(an.fftSize), last: 0 })
+    } catch (err) {
+      console.error(`speaking light: ${err.message || err}`)
+      return
+    }
+    if (!this.#meterTimer) this.#meterTimer = setInterval(() => this.#measure(), 50)
+  }
+
+  // #meterMic measures our own microphone's current track, if any.
+  #meterMic() {
+    const lp = this.#room?.localParticipant
+    const t = lp?.getTrackPublication(Track.Source.Microphone)?.track?.mediaStreamTrack
+    const m = this.#meters.get('mic')
+    if (m?.mst === t) return
+    if (t) this.#meter('mic', lp.identity, t)
+    else this.#unmeter('mic')
+  }
+
+  #unmeter(sid) {
+    const m = this.#meters.get(sid)
+    if (!m) return
+    m.src.disconnect()
+    this.#meters.delete(sid)
+  }
+
+  #measure() {
+    const now = performance.now()
+    const lit = new Set()
+    for (const m of this.#meters.values()) {
+      m.an.getFloatTimeDomainData(m.buf)
+      let sum = 0
+      for (const v of m.buf) sum += v * v
+      if (Math.sqrt(sum / m.buf.length) > 0.00316) m.last = now // -50 dBFS
+      if (now - m.last < 300) lit.add(m.id)
+    }
+    if (lit.size === this.#talking.size && [...lit].every((id) => this.#talking.has(id))) return
+    this.#talking = lit
+    this.people = this.people.map((p) => ({ ...p, speaking: lit.has(p.id) }))
   }
 
   #container() {
@@ -474,7 +554,7 @@ class Voice {
     this.people = all.map((p) => ({
       id: p.identity,
       name: p.name || p.identity,
-      speaking: p.isSpeaking,
+      speaking: this.#meters.size ? this.#talking.has(p.identity) : p.isSpeaking,
       muted: !p.isMicrophoneEnabled,
       camera: p.isCameraEnabled,
       sharing: p.isScreenShareEnabled,
@@ -504,6 +584,12 @@ class Voice {
   }
 
   #reset() {
+    clearInterval(this.#meterTimer)
+    this.#meterTimer = 0
+    for (const sid of [...this.#meters.keys()]) this.#unmeter(sid)
+    this.#meterCtx?.close().catch(() => {})
+    this.#meterCtx = null
+    this.#talking = new Set()
     for (const el of this.#audio.values()) el.remove()
     this.#audio.clear()
     this.#ctx?.close().catch(() => {})

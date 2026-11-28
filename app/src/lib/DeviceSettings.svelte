@@ -48,9 +48,11 @@
 </div>
 
 <style>
-  .devices { display: grid; gap: 14px; max-width: 460px; }
+  .devices { display: grid; gap: 22px; max-width: 460px; }
   h2 { margin: 0; font-size: 18px; text-transform: none; letter-spacing: 0; color: var(--text); }
-  label { display: grid; gap: 4px; font-size: 13px; }
+  /* Each title sits right on top of its own menu, well apart from the one above. */
+  label { display: grid; gap: 6px; font-size: 13px; font-weight: 600; }
+  select { font-weight: 400; }
   select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 8px; }
   .small { font-size: 12px; margin: 0; }
 </style>

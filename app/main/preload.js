@@ -21,6 +21,12 @@ contextBridge.exposeInMainWorld('eris', {
     return () => ipcRenderer.removeListener('pick-share', h)
   },
   shareMainScreenNext: () => ipcRenderer.invoke('share-main-screen-next'),
+  clipboardFiles: () => ipcRenderer.invoke('clipboard-files'),
+  onPasteFiles: (fn) => {
+    const h = (_e, data) => fn(data)
+    ipcRenderer.on('paste-files', h)
+    return () => ipcRenderer.removeListener('paste-files', h)
+  },
   sharePicked: (n, id, audio) => ipcRenderer.invoke('share-picked', { n, id, audio }),
   startHelper: (role, opts) => ipcRenderer.invoke('helper-start', { role, opts }),
   stopHelper: (role) => ipcRenderer.invoke('helper-stop', role),

@@ -82,6 +82,5 @@
   .small { font-size: 12px; margin: 0; }
   .row { display: flex; gap: 8px; align-items: center; }
   .grow { flex: 1; }
-  .danger { background: none; border-color: var(--highlight); color: var(--highlight); }
   p { margin: 0; }
 </style>

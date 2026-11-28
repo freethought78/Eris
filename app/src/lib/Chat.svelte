@@ -1,3 +1,7 @@
+<script module>
+  const drafts = new Map() // server#room -> unsent text
+</script>
+
 <script>
   // A room's text chat (DESIGN.md 4.3): history that loads as you scroll up,
   // sending with Enter (Shift+Enter for a new line), files by button, drag
@@ -29,7 +33,7 @@
   let videos = $derived([
     ...(voice.stage ? [{ key: 'share:' + voice.stage.id, kind: 'share', label: `${voice.stage.name}'s ${voice.stage.game ? 'game' : 'screen'}`, track: voice.stage.track }] : []),
     ...(voice.myShare ? [{ key: 'share:me', kind: 'share', local: true, label: voice.game ? 'Your game (what spectators see)' : 'Your screen (what others see)', track: voice.myShare.track }] : []),
-    ...voice.tiles.map((t) => ({ key: 'cam:' + t.id + (t.local ? ':me' : ''), kind: 'cam', label: t.local ? `${t.name} (you)` : t.name, track: t.track, mirror: t.local })),
+    ...voice.tiles.map((t) => ({ key: 'cam:' + t.id + (t.local ? ':me' : ''), kind: 'cam', label: t.local ? `${t.name} (You)` : t.name, track: t.track, mirror: t.local })),
   ])
   let focus = $state('') // the big one's key; '' = the watched share; 'none' = none
   let big = $derived(
@@ -158,13 +162,43 @@
     if (room.access && e.dataTransfer?.files?.length) addFiles([...e.dataTransfer.files])
   }
 
+  // Pasting files: pictures come with the paste itself; files copied in a
+  // file manager arrive as file:// links, which the main process reads
+  // (main/contextmenu.js). The right-click menu's Paste sends them too.
+  const asFiles = (list) => list.map((f) => new File([f.data], f.name, { type: f.type }))
   function paste(e) {
     const files = [...(e.clipboardData?.files || [])]
     if (files.length) {
       e.preventDefault()
       addFiles(files)
+      return
+    }
+    const types = [...(e.clipboardData?.types || [])]
+    const plain = e.clipboardData?.getData('text/plain') || ''
+    if (types.includes('text/uri-list') || /^file:\/\//m.test(plain)) {
+      e.preventDefault()
+      window.eris.clipboardFiles().then((list) => {
+        if (list.length) addFiles(asFiles(list))
+        else if (plain) document.execCommand('insertText', false, plain)
+      })
     }
   }
+  $effect(() =>
+    window.eris.onPasteFiles((list) => {
+      if (document.activeElement === input) addFiles(asFiles(list))
+    }),
+  )
+
+  // What's typed but not sent stays with its room (on this PC, while the
+  // app runs) when you look at another room and come back.
+  let draftKey = ''
+  $effect(() => {
+    const key = conn.entry.address + '#' + room.id
+    if (key === draftKey) return
+    if (draftKey) drafts.set(draftKey, text)
+    draftKey = key
+    text = drafts.get(key) || ''
+  })
 
   function startEdit(m) {
     editing = m.id
@@ -344,7 +378,7 @@
             <div class="muted small">Enter to save, Escape to cancel</div>
           {:else if m.text}
             <div class="text">
-              {#each parts(m.text) as p}{#if p.link}<a href={p.link} target="_blank" rel="noreferrer">{p.link}</a>{:else}{p.text}{/if}{/each}{#if m.edited}<span class="muted small"> (edited)</span>{/if}
+              {#each parts(m.text) as p}{#if p.link}<a href={p.link} target="_blank" rel="noreferrer">{p.link}</a>{:else}{p.text}{/if}{/each}{#if m.edited}<span class="edited muted small" title={`Edited ${new Date(m.edited).toLocaleString()}`}>(edited {when(m.edited)})</span>{/if}
             </div>
           {/if}
           {#each m.files as f (f.id)}
@@ -461,7 +495,8 @@
   .tools { position: absolute; right: 4px; top: 0; display: none; gap: 2px; }
   .msg:hover .tools { display: flex; }
   .tools button { padding: 2px 6px; font-size: 12px; background: var(--surface-2); }
-  .edit { width: 100%; min-height: 60px; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 8px; }
+  .edited { margin-left: 8px; }
+  .edit { width: 100%; min-height: 60px; max-height: 60vh; field-sizing: content; resize: vertical; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 8px; }
   .pic { display: block; padding: 0; margin: 4px 0; background: none; border: none; }
   .pic img { max-width: min(420px, 100%); max-height: 320px; border-radius: var(--radius); display: block; }
   .file { display: inline-flex; align-items: center; gap: 10px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; margin: 4px 0; max-width: 420px; }

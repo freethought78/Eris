@@ -19,8 +19,8 @@
       {#each list as m (m.id)}
         <div class="m" class:off={!m.online}>
           <span class="dot" class:on={m.online}></span>
-          <span class="name">{m.name}{m.id === conn.you?.id ? ' (you)' : ''}</span>
-          {#if m.role !== 'member'}<span class="role">{m.role}</span>{/if}
+          <span class="name">{m.name}{m.id === conn.you?.id ? ' (You)' : ''}</span>
+          {#if m.role !== 'member'}<span class="role">{m.role[0].toUpperCase() + m.role.slice(1)}</span>{/if}
         </div>
         {#if conn.live[m.id] && m.id !== conn.you?.id}
           <div class="live">

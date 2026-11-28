@@ -10,6 +10,7 @@ const { spawn, execFileSync } = require('node:child_process')
 const updater = require('./updater')
 const host = require('./host')
 const linuxInstall = require('./linux-install')
+const contextMenu = require('./contextmenu')
 
 // `Eris --server` only starts this PC's server in its own window (host.js)
 // and exits: for a desktop shortcut that starts the server without the app.
@@ -187,6 +188,7 @@ function createWindow() {
     },
   })
   win.setMenuBarVisibility(false)
+  contextMenu.setup(win, send)
   // The window keeps its own title (the page's would hide "(dev)").
   win.on('page-title-updated', (e) => e.preventDefault())
   // Links in messages open in the browser; the window never goes anywhere else.

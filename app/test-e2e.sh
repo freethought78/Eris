@@ -68,7 +68,8 @@ chat=$(cat $T/logs-host/app.log $T/logs-player/app.log 2>/dev/null | grep -c "au
 echo "== chat messages received with their files: $chat of 2"
 heard=$(cat $T/logs-host/app.log $T/logs-player/app.log 2>/dev/null | grep -c "auto test: hearing")
 seen=$(cat $T/logs-host/app.log $T/logs-player/app.log 2>/dev/null | grep -c "auto test: seeing")
-echo "== voice: $heard of 2 hear the other; cameras: $seen of 2 see the other"
+lit=$(cat $T/logs-host/app.log $T/logs-player/app.log 2>/dev/null | grep -c "auto test: speaking light on")
+echo "== voice: $heard of 2 hear the other; speaking lights: $lit of 2; cameras: $seen of 2 see the other"
 optin=$(cat $T/logs-player/app.log 2>/dev/null | grep -c "share offered; received before Watch: false")
 watched=$(cat $T/logs-player/app.log 2>/dev/null | grep -c "auto test: watching")
 echo "== screen share: nothing received before Watch: $optin of 1; watched: $watched of 1"
@@ -90,7 +91,7 @@ sleep 12 # the apps send diagnostics every 10 s
 diagfiles=$(ls $T/data/logs/diag-*.jsonl 2>/dev/null | wc -l)
 voicediag=$(cat $T/data/logs/diag-*.jsonl 2>/dev/null | grep -c '"kind":"voice"')
 echo "== diagnostics: files for $diagfiles of 2 members; voice stats entries: $voicediag"
-if [ "$n" -ge 2 ] && [ "$chat" -ge 2 ] && [ "$heard" -ge 2 ] && [ "$seen" -ge 2 ] && [ "$optin" -ge 1 ] && [ "$watched" -ge 1 ] && [ "$diagfiles" -ge 2 ] && [ "$voicediag" -ge 2 ] && [ "$sndok" = 1 ] && [ "$gameok" = 1 ]; then
+if [ "$n" -ge 2 ] && [ "$chat" -ge 2 ] && [ "$heard" -ge 2 ] && [ "$lit" -ge 2 ] && [ "$seen" -ge 2 ] && [ "$optin" -ge 1 ] && [ "$watched" -ge 1 ] && [ "$diagfiles" -ge 2 ] && [ "$voicediag" -ge 2 ] && [ "$sndok" = 1 ] && [ "$gameok" = 1 ]; then
   echo "PASS"
   rm -rf "$T" # the logs are only kept when it fails
 else
