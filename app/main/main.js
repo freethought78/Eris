@@ -1,7 +1,7 @@
 // Eris app, main process: the window, the saved server list, HTTP calls to
 // servers, and the streaming helper (DESIGN.md section 4; the helper is
 // helper/, started here and talked to with JSON lines on stdin and stdout).
-const { app, BrowserWindow, ipcMain, screen, session, net, shell, dialog } = require('electron')
+const { app, BrowserWindow, ipcMain, screen, session, net, shell, dialog, desktopCapturer } = require('electron')
 const crypto = require('node:crypto')
 const path = require('node:path')
 const fs = require('node:fs')
@@ -16,10 +16,12 @@ const linuxInstall = require('./linux-install')
 const serverMode = process.argv.includes('--server')
 
 // Automated tests: Chromium's fake microphone (a tone) and camera (a test
-// picture), with no permission prompts.
+// picture), with no permission prompts, and no sound played on this PC.
+// Silent: the tests check that sound arrives, and play nothing out loud.
 if (process.env.ERIS_FAKE_MEDIA) {
   app.commandLine.appendSwitch('use-fake-device-for-media-stream')
-  app.commandLine.appendSwitch('use-fake-ui-for-media-stream')
+  if (!process.env.ERIS_SHOW_PICKER) app.commandLine.appendSwitch('use-fake-ui-for-media-stream') // (it skips the share picker too)
+  app.commandLine.appendSwitch('mute-audio')
 }
 
 // ERIS_PROFILE=name keeps a separate server list and logs, so two copies can
@@ -120,6 +122,48 @@ function stopHelper(role) {
   setTimeout(() => child.kill(), 5000)
 }
 
+// The app's logs (logs/ in its data folder) are kept for 3 days: app.log is
+// today's (an older one is renamed app-DAY.log), helper sessions have their
+// own files, and anything older than 3 days is deleted at each start. A day's
+// app.log stops at 100 MB.
+const LOG_DAYS = 3
+const LOG_DAY_MAX = 100 * 1024 * 1024
+
+function openAppLog() {
+  const dir = userFile('logs')
+  fs.mkdirSync(dir, { recursive: true })
+  const day = (d) => d.toISOString().slice(0, 10)
+  const current = path.join(dir, 'app.log')
+  try {
+    const st = fs.statSync(current)
+    if (day(st.mtime) !== day(new Date())) fs.renameSync(current, path.join(dir, `app-${day(st.mtime)}.log`))
+  } catch {}
+  const cut = Date.now() - LOG_DAYS * 24 * 3600 * 1000
+  for (const f of fs.readdirSync(dir)) {
+    try {
+      if (fs.statSync(path.join(dir, f)).mtimeMs < cut) fs.rmSync(path.join(dir, f))
+    } catch {}
+  }
+  let size = 0
+  try {
+    size = fs.statSync(current).size
+  } catch {}
+  const out = fs.createWriteStream(current, { flags: 'a' })
+  let full = false
+  return {
+    write(text) {
+      if (full) return
+      if (size + text.length > LOG_DAY_MAX) {
+        full = true
+        out.write('--- this log reached its size limit for today\n')
+        return
+      }
+      size += text.length
+      out.write(text)
+    },
+  }
+}
+
 function createWindow() {
   win = new BrowserWindow({
     width: 1100,
@@ -150,8 +194,7 @@ function createWindow() {
   })
   // The window's console goes to logs/app.log, to find problems on a PC we
   // can't see.
-  fs.mkdirSync(userFile('logs'), { recursive: true })
-  const appLog = fs.createWriteStream(userFile(path.join('logs', 'app.log')), { flags: 'a' })
+  const appLog = openAppLog()
   appLog.write(`--- ${new Date().toISOString()} Eris ${app.getVersion()} on ${process.platform}\n`)
   win.webContents.on('console-message', (e) => appLog.write(`[${e.level}] ${e.message}\n`))
   win.webContents.on('render-process-gone', (_e, d) => appLog.write(`window process gone: ${d.reason}\n`))
@@ -289,6 +332,41 @@ ipcMain.handle('download', (_e, url) => {
   if (win && !win.isDestroyed() && /^https:\/\//.test(url)) win.webContents.downloadURL(url)
 })
 
+// Sharing a screen or window: the window shows its own picker (thumbnails of
+// every screen and window); its answer comes back here. Sound with the share
+// is Windows only (Chromium's "loopback"). Automated tests pick the first
+// screen (ERIS_AUTO_SHARE).
+const picks = new Map() // request number -> resolve
+let pickCount = 0
+function shareHandler(_request, callback) {
+  // Screens and windows asked for apart: together, one failing (no window
+  // list on some desktops) leaves both empty.
+  const get = (type) => desktopCapturer.getSources({ types: [type], thumbnailSize: { width: 320, height: 180 }, fetchWindowIcons: false }).catch(() => [])
+  Promise.all([get('screen'), get('window')])
+    .then(([screens, windows]) => [...screens, ...windows])
+    .then(async (sources) => {
+      let choice = null
+      if (process.env.ERIS_AUTO_SHARE) {
+        choice = { id: sources.find((s) => s.id.startsWith('screen:'))?.id, audio: false }
+      } else {
+        const n = ++pickCount
+        const list = sources
+          .filter((s) => s.name !== 'Eris' && s.name !== 'Eris (dev)')
+          .map((s) => ({ id: s.id, name: s.name, screen: s.id.startsWith('screen:'), thumb: s.thumbnail.toDataURL() }))
+        send('pick-share', { n, sources: list, canAudio: process.platform === 'win32' })
+        choice = await new Promise((resolve) => picks.set(n, resolve))
+      }
+      const source = choice && sources.find((s) => s.id === choice.id)
+      if (!source) return callback({})
+      callback({ video: source, ...(choice.audio && process.platform === 'win32' ? { audio: 'loopback' } : {}) })
+    })
+    .catch(() => callback({}))
+}
+ipcMain.handle('share-picked', (_e, { n, id, audio }) => {
+  picks.get(n)?.(id ? { id, audio } : null)
+  picks.delete(n)
+})
+
 // HTTP to a server, from here rather than the window (no cross-origin limits).
 ipcMain.handle('api', async (_e, { method, url, token, body }) => {
   try {
@@ -308,6 +386,18 @@ ipcMain.handle('api', async (_e, { method, url, token, body }) => {
     return { status: res.status, json }
   } catch (err) {
     return { status: 0, json: { error: netError(url, err) } }
+  }
+})
+
+// The end of a helper's log, for diagnostics (only logs in our own folder).
+ipcMain.handle('log-tail', (_e, file) => {
+  const dir = userFile('logs') + path.sep
+  const p = path.resolve(String(file || ''))
+  if (!p.startsWith(dir)) return []
+  try {
+    return fs.readFileSync(p, 'utf8').split('\n').slice(-300)
+  } catch {
+    return []
   }
 })
 
@@ -352,6 +442,7 @@ if (serverMode) {
   app.whenReady().then(() => {
     loadPins()
     session.defaultSession.setCertificateVerifyProc(verifyCertificate)
+    session.defaultSession.setDisplayMediaRequestHandler(shareHandler)
     linuxInstall.integrate() // app menu and desktop icon, like an installer (AppImage only)
     createWindow()
     updater.setup((s) => send('update', s))

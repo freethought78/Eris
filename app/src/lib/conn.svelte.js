@@ -48,6 +48,7 @@ export class Conn {
   maxFileMB = $state(100)
   voice = $state({}) // member id -> the room whose voice they're in
   voiceOn = $state(false) // the server runs voice
+  icon = $state('') // the server's icon hash ('' = none)
 
   #ws = null
   #retry = null
@@ -85,6 +86,7 @@ export class Conn {
       return
     }
     this.serverVersion = info.json.version || ''
+    this.icon = info.json.icon || ''
     if (!this.ignoreVersion && newer(this.serverVersion, Conn.appVersion)) {
       console.info(`server ${this.entry.address} runs ${this.serverVersion}, newer than this app (${Conn.appVersion}): suggesting an update`)
       this.status = 'outdated'
@@ -219,6 +221,14 @@ export class Conn {
     this.send({ type: 'room-delete', id })
   }
 
+  diagUrl() {
+    return `${httpBase(this.entry.address)}/api/diag`
+  }
+
+  iconUrl() {
+    return this.icon ? `${httpBase(this.entry.address)}/api/icon?v=${this.icon}` : ''
+  }
+
   fileUrl(id) {
     return `${httpBase(this.entry.address)}/api/files/${id}`
   }
@@ -260,8 +270,13 @@ export class Conn {
         this.chat = {} // reloaded when shown: messages may have come and gone while away
         this.voice = Object.fromEntries((m.voice || []).map((v) => [v.member_id, v.room_id]))
         this.voiceOn = !!m.server?.voice
+        this.icon = m.server?.icon || ''
         this.loadResults()
         for (const fn of this.#handlers.hello) fn()
+        break
+      case 'server':
+        this.icon = m.server?.icon || ''
+        if (m.server?.name) this.serverName = m.server.name
         break
       case 'voice':
         if (m.room_id) this.voice[m.member_id] = m.room_id

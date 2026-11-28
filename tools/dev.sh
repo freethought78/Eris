@@ -122,7 +122,7 @@ echo "== dev server on 127.0.0.1:$PORT"
 CTL="$DEV/ctl"
 rm -f "$CTL"
 mkfifo "$CTL"
-"$R/server/bin/eris-server" -exit-with-stdin -addr "127.0.0.1:$PORT" -media-port 7311 -data "$DEV/data" <"$CTL" 2>&1 | tee -a "$DEV/server.log" &
+"$R/server/bin/eris-server" -exit-with-stdin -addr "127.0.0.1:$PORT" -media-port 7311 -data "$DEV/data" <"$CTL" 2>&1 &  # (it keeps its own log in $DEV/data/logs, 3 days)
 exec 3>"$CTL" # held open: the dev server runs until this closes
 stop() {
   echo stop >&3 2>/dev/null || true

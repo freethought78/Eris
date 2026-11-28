@@ -67,13 +67,23 @@ on in a dev build).
 **Voice and cameras** (`voice.go`, DESIGN.md 4.4): the server runs LiveKit
 (`livekit-server`, which must sit next to the program; the Linux app puts it
 there, and `tools/livekit.sh` fetches the pinned version), with keys made on
-first run (`livekit.json`), a config written at each start (`livekit.yaml`)
-and its log in `livekit.log`, all in the data folder. Its signalling goes
+first run (`livekit.json`) and a config written at each start (`livekit.yaml`)
+in the data folder; its log is in `logs/`. Its signalling goes
 through this server's port (`/rtc`); the audio and video use one UDP port,
 `-media-port` (7301). `POST /api/rooms/{id}/voice` gives a member who may go
 in the room a LiveKit token for its voice; who's in which voice goes over the
 live connection. LiveKit stops with the server, even if the server is killed.
 Without `livekit-server`, voice is off and everything else works.
+
+**Logs and diagnostics** (`logs.go`, `diag.go`): the server's log, LiveKit's,
+and members' diagnostics (their apps send their log, voice connection stats and
+Play Together sessions' logs; never messages: `POST /api/diag`) go in `logs/` in
+the data folder, one file per day each, kept for 3 days, with a size cap per
+day. The owner reads a member's with `GET /api/admin/diag?member=ID&lines=N`.
+
+**Server icon** (`icon.go`): `GET /api/icon`; the owner sets it with
+`POST /api/admin/icon` (a PNG, JPEG, WebP or GIF up to 1 MB) or removes it with
+`DELETE`; apps are told over the live connection.
 
 **Its window:** run in a terminal (the app starts it in one: see "Hosting a
 server" in app/README.md), it shows the join link, a status line that changes

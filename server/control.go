@@ -85,12 +85,18 @@ func (l *logRing) Lines() []string {
 	return append([]string(nil), l.lines...)
 }
 
-// say prints to the window and the recent log.
+// say prints to the window and the recent log (and the log file).
 func say(format string, args ...any) {
 	s := fmt.Sprintf(format, args...)
 	fmt.Print(s)
+	if logFileWriter != nil {
+		logFileWriter.Write([]byte(s))
+	}
 	recent.Write([]byte(s))
 }
+
+// logFileWriter is the server's log file, for say (main.go sets it).
+var logFileWriter io.Writer
 
 // --- Controls ---
 

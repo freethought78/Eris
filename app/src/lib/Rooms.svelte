@@ -7,7 +7,7 @@
   import { voice } from './voice.svelte.js'
   import VoiceBar from './VoiceBar.svelte'
 
-  let { conn, selected, onselect, onedit, oncreate, view, onview, onsettings } = $props()
+  let { conn, selected, onselect, onedit, oncreate, onsettings, canHost = false } = $props()
 
   let staff = $derived(conn.you?.role === 'owner' || conn.you?.role === 'admin')
   let volumeFor = $state(null) // member id whose volume slider is open
@@ -37,7 +37,7 @@
     {#if staff}<button class="add" title="Add a room" onclick={oncreate}>+</button>{/if}
   </div>
   {#each conn.rooms as r (r.id)}
-    <div class="room" class:sel={view === 'chat' && r.id === selected} class:unread={conn.unread(r) && r.id !== selected}>
+    <div class="room" class:sel={r.id === selected} class:unread={conn.unread(r) && r.id !== selected}>
       <button
         class="name"
         onclick={() => onselect(r.id)}
@@ -74,11 +74,7 @@
     {/each}
   {/each}
   <div class="spacer"></div>
-  {#if conn.you?.role === 'owner'}
-    <button class="tests" class:sel={view === 'server'} onclick={() => onview(view === 'server' ? 'chat' : 'server')}>Server</button>
-  {/if}
-  <button class="tests" class:sel={view === 'tests'} onclick={() => onview(view === 'tests' ? 'chat' : 'tests')}>Stream tests</button>
-  <VoiceBar {onsettings} />
+  <VoiceBar {onsettings} {conn} {canHost} />
 </div>
 
 <style>
@@ -106,6 +102,4 @@
   .volume { display: flex; align-items: center; gap: 6px; padding: 2px 8px 6px 44px; font-size: 11px; color: var(--muted); }
   .volume input { width: 110px; padding: 0; }
   .spacer { flex: 1; }
-  .tests { background: none; border: 1px solid var(--border); color: var(--muted); font-size: 12px; }
-  .tests.sel { color: var(--text); background: var(--accent); }
 </style>

@@ -10,6 +10,19 @@
 // being replaced (a stream test starting while we already watch, say) still
 // reports to the test it belonged to, and its ending can't touch the new run.
 
+import { diag } from './diag.svelte.js'
+
+// A helper's session goes to the server's diagnostics: its summary, and the
+// end of its log.
+async function sendSession(conn, side, msg) {
+  if (!conn) return
+  if (msg.type === 'summary') diag.add({ kind: 'stream-summary', side, summary: msg.summary }, conn)
+  if (msg.type === 'exit' && msg.log) {
+    const lines = await window.eris.logTail(msg.log)
+    diag.add({ kind: 'stream-log', side, code: msg.code, lines }, conn)
+  }
+}
+
 function newTestId() {
   const d = new Date()
   const p = (n) => String(n).padStart(2, '0')
@@ -117,6 +130,7 @@ class Stream {
 
   #fromHost(run, msg) {
     const conn = this.hostConn
+    sendSession(conn, 'host', msg)
     if (msg.type === 'summary') {
       this.lastSummary = { side: 'host', summary: msg.summary }
       if (msg.test_id && conn) this.#post(conn, msg.test_id, 'host', msg.summary)
@@ -150,6 +164,7 @@ class Stream {
 
   #fromPlayer(run, msg) {
     const ctx = this.#playerRuns.get(run)
+    sendSession(ctx?.conn, 'player', msg)
     if (msg.type === 'summary') {
       this.lastSummary = { side: 'player', summary: msg.summary }
       if (ctx?.testId) {

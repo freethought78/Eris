@@ -31,6 +31,10 @@ type Settings struct {
 	FileRetentionDays    *int `json:"file_retention_days,omitempty"`
 	MaxFileMB            int  `json:"max_file_mb,omitempty"`
 	MaxStorageGB         int  `json:"max_storage_gb,omitempty"`
+
+	// The server's icon (icon.go): its picture type and a short hash.
+	IconType string `json:"icon_type,omitempty"`
+	IconHash string `json:"icon_hash,omitempty"`
 }
 
 func orDefault(p *int, d int) int {

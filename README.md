@@ -22,9 +22,9 @@
 
 *Not affiliated with Discord, TeamSpeak or Parsec.*
 
-> **Early days.** Eris is at version 0.1. Text chat, files, private rooms, voice, cameras,
-> hosting and streaming work; watching streams inside the app and push-to-talk come next. Going live is
-> Linux-only for now (Windows can join and play).
+> **Early days.** Eris is at version 0.2. Text chat, files, private rooms, voice, cameras,
+> screen sharing, hosting and Play Together work; push-to-talk comes later. Going live for
+> Play Together is Linux-only for now (Windows can share its screen, join and play).
 
 ---
 
@@ -62,53 +62,71 @@ The first time you open a private room, Eris asks for its password; you only giv
   the chat (click one to see it full size); other files get a *Save* button.
 - Links open in your browser. A dot next to a room means there's something new in it.
 
-## Talking
+## Talking, cameras and sharing your screen
 
 - **Join a room's voice** by double-clicking the room, or with **Join voice** at the top of
   its chat (or the speaker that appears when you point at a room). You can read another
   room's chat while you talk in one.
 - Who's in each room's voice is listed under the room; a green light shows who's speaking.
-- The bar at the bottom of the rooms list has **mute** (🎤), **deafen** (🎧: hear nobody,
-  and mute), **camera** (📷) and **leave** (✕). Cameras show above the room's chat.
+- The panel at the bottom of the rooms list has **mute** (🎤), **deafen** (🎧: hear nobody,
+  and mute), **camera** (📷), **share your screen** (🖵) and **leave** (✕). Cameras show
+  above the room's chat.
+- **Sharing your screen:** pick a whole screen or one window (on Windows, tick *Share
+  sound too* to include its sound). Others in the room see a card saying you're sharing,
+  and only those who press **Watch** receive it, so nobody's connection carries a share
+  they aren't watching. Watching opens it above the chat, with **Fullscreen**.
 - Click someone's name under the room to change how loud they are (just for you).
-- **⚙** at the bottom right of the rooms list picks your microphone, speakers and camera.
-  Echo cancellation and noise suppression are always on.
+
+## Settings
+
+**⚙** (bottom left, or in the panel under the rooms) opens Settings:
+
+- **Voice & video:** your microphone, speakers and camera. Echo cancellation and noise
+  suppression are always on.
+- **Your server (this PC):** host a server on this PC (see below).
+- **Server: (name):** for a server you own, from any PC: its status, log, icon, *Check for
+  updates*, *Restart* and *Stop*.
+- **About Eris:** your version and updates, and **diagnostics**: Eris sends the owner of each
+  server you're on what helps them fix problems (this app's log, connection stats while in
+  voice, Play Together sessions' logs; never your messages), kept for 3 days. You can turn
+  it off there.
 
 ## Hosting your own server
 
 The server comes with the app (Linux for now).
 
-1. Press **⌂** (*Host*) at the bottom of the server list, then **Start server**. The server
-   opens in its own small terminal window, which shows who's online and stays open as long
-   as it runs. It keeps running when you close Eris; close its window (or press *Stop
-   server*) to stop it.
-2. Copy the **join link** from Host and give it to your friends. The first time, press
+1. Open **Settings**, **Your server (this PC)**, and press **Start server**. The server opens
+   in its own small terminal window, which shows who's online and stays open as long as it
+   runs. It keeps running when you close Eris; close its window (or press *Stop server*) to
+   stop it. If it's stopped, its page in Eris says so and offers **Start server**.
+2. Copy the **join link** there and give it to your friends. The first time, press
    **Join it** yourself: the **owner code** is filled in, and whoever joins with it first
    becomes the owner.
-3. Your friends need to reach your PC: forward **TCP 7300** and, for voice and cameras,
-   **UDP 7301** on your router to it (and, for streaming games, **UDP 7401**), or put it
-   in your router's DMZ.
+3. Your friends need to reach your PC: forward **TCP 7300** and, for voice, cameras and
+   screen sharing, **UDP 7301** on your router to it (and, for Play Together, **UDP 7401**),
+   or put it in your router's DMZ.
 
-As owner, the **Server** button at the bottom of the rooms list gives you the server's
-status, log, *Check for updates*, *Restart* and *Stop* from any PC. The **+** next to
-*Rooms* adds a room; the gear beside a room changes it or makes it private.
+As owner, **Settings, Server: (name)** also sets the server's **icon**, which everyone sees in
+their server list. The **+** next to *Rooms* adds a room; the gear beside a room changes
+it or makes it private.
 
 **Updates:** the server checks for a new version every hour and installs it as soon as
-nobody is streaming; members' apps reconnect by themselves. *Check for updates* in Host
-does it straight away, and updates the app too.
+nobody is streaming; members' apps reconnect by themselves. *Check for updates* does it
+straight away, and updates the app too.
 
-**Settings** live with the server's data (`~/.config/Eris-server` on Linux):
-`host.json` holds the data folder, the port and the address in the join link;
-`server-data/settings.json` holds the server's name, an optional password, and how long
-messages and files are kept (30 days by default), the largest file allowed (100 MB) and
-the total space for files (10 GB).
+**Its files** live in `~/.config/Eris-server` on Linux: `host.json` holds the data
+folder, the port and the address in the join link; `server-data/settings.json` holds the
+server's name, an optional password, and how long messages and files are kept (30 days by
+default), the largest file allowed (100 MB) and the total space for files (10 GB). Its
+logs (its own, LiveKit's and members' diagnostics) are in `server-data/logs`, kept for 3
+days.
 
 ## Playing together
 
-On Linux, press **Go Live** to stream your main screen. Members see *LIVE* next to your
-name and press **Join**: the game opens in a window on their PC, and their controller
-works in your game. *Stream test* runs a 60-second test with a member and keeps both
-sides' measurements (under *Stream tests*).
+On Linux, press **🎮** in the panel under the rooms to go live: low-latency streaming of
+your main screen, for playing together. Members in your room's voice see a card saying
+you're live and press **Join** (or Join next to your name in the members list): the game
+opens in a window on their PC, and their controller works in your game.
 
 ---
 

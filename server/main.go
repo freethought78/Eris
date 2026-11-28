@@ -71,12 +71,19 @@ func main() {
 	if err != nil {
 		fatal("data folder %s: %v", dir, err)
 	}
+	logFile := newDailyLog(logDir(dir), "server", "log") // its log, in the data folder too (3 days)
+	cleanLogs(logDir(dir), time.Now())
+	os.Remove(filepath.Join(dir, "server.log")) // from before logs/
+	log.SetOutput(io.MultiWriter(os.Stderr, recent, logFile))
+	logFileWriter = logFile
 	program, _ = thisProgram()
 	hub := newHub(store)
 	ctl := &control{started: time.Now(), dataDir: dir, stop: make(chan string, 1), restart: make(chan string, 1),
 		ask: make(chan struct{}, 1), checking: !*noCheck}
 	mux := routes(store, hub)
 	adminRoutes(mux, store, hub, ctl)
+	iconRoutes(mux, store, hub, ctl)
+	diagRoutes(mux, store, ctl)
 
 	cert, fingerprint, err := loadCert(dir)
 	if err != nil {
@@ -231,7 +238,7 @@ func infoHandler(store *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		st := store.Settings()
 		writeJSON(w, http.StatusOK, map[string]any{"name": st.Name, "version": version,
-			"needs_password": st.ServerPassword != "", "encrypted": true})
+			"needs_password": st.ServerPassword != "", "encrypted": true, "icon": st.IconHash})
 	}
 }
 

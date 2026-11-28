@@ -31,11 +31,15 @@ function settings() {
     } catch {}
   }
   const out = { data: s?.data || file('server-data'), addr: s?.addr || ':7300', public: s?.public || '', ...(s?.media_port ? { media_port: s.media_port } : {}) }
-  if (!fs.existsSync(file('host.json'))) {
-    fs.mkdirSync(hostDir(), { recursive: true })
-    fs.writeFileSync(file('host.json'), JSON.stringify(out, null, 2) + '\n')
-  }
   return out
+}
+
+// saveSettings writes host.json the first time a server is started here, so
+// its choices can be edited (only reading it doesn't make the folder).
+function saveSettings(s) {
+  if (fs.existsSync(file('host.json'))) return
+  fs.mkdirSync(hostDir(), { recursive: true })
+  fs.writeFileSync(file('host.json'), JSON.stringify(s, null, 2) + '\n')
 }
 
 function port(s) {
@@ -194,6 +198,7 @@ async function start() {
     return { ok: false, error: `Couldn't set up the server program: ${err.message}` }
   }
   if (!fs.existsSync(exe)) return { ok: false, error: `The server program is missing (${exe}).` }
+  saveSettings(s)
   fs.mkdirSync(s.data, { recursive: true })
   const cmd = [exe, '-data', s.data, '-addr', s.addr, ...(s.public ? ['-public', s.public] : []), ...(s.media_port ? ['-media-port', String(s.media_port)] : [])]
   // Not ours to keep: the window's process lives on after the app closes.

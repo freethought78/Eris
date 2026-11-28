@@ -4,14 +4,14 @@
   import { stream } from './lib/stream.svelte.js'
   import { update } from './lib/update.svelte.js'
   import AddServer from './lib/AddServer.svelte'
-  import Results from './lib/Results.svelte'
   import Rooms from './lib/Rooms.svelte'
   import Chat from './lib/Chat.svelte'
   import Members from './lib/Members.svelte'
   import RoomDialog from './lib/RoomDialog.svelte'
-  import ServerPanel from './lib/ServerPanel.svelte'
-  import DeviceSettings from './lib/DeviceSettings.svelte'
+  import Settings from './lib/Settings.svelte'
+  import SharePicker from './lib/SharePicker.svelte'
   import { voice } from './lib/voice.svelte.js'
+  import { diag } from './lib/diag.svelte.js'
   import { httpBase } from './lib/conn.svelte.js'
   import logo from '../build/icon.svg'
 
@@ -22,24 +22,51 @@
   let addInitial = $state({})
   let info = $state({ canHost: false, version: '' })
 
-  const HOST = '#host' // the Host view (this PC's server) in place of a server
-  let conn = $derived(selected && selected !== HOST ? conns[selected] : null)
+  let conn = $derived(selected ? conns[selected] : null)
   let roomSel = $state({}) // server address -> the room shown
-  let view = $state('chat') // chat or tests
   let roomDialog = $state(null) // {room} while adding or changing a room
-  let deviceSettings = $state(false)
+  let settings = $state(null) // the section open in Settings, or null
+  let hostInfo = $state(null) // this PC's server (main/host.js status)
+
+  // This PC's server: is it running, and which saved server is it?
+  async function checkHost() {
+    try {
+      hostInfo = await window.eris.hostStatus()
+    } catch {}
+  }
+  checkHost()
+  setInterval(checkHost, 15000)
+
+  function isLocalServer(c) {
+    if (!hostInfo?.settings || !c) return false
+    const port = String(hostInfo.settings.addr).split(':').pop() || '7300'
+    const names = [hostInfo.settings.public, '127.0.0.1', 'localhost'].filter(Boolean)
+    return names.some((h) => c.entry.address === `${h}:${port}`)
+  }
+
+  let startingLocal = $state(false)
+  async function startLocal() {
+    startingLocal = true
+    const r = await window.eris.hostStart()
+    startingLocal = false
+    await checkHost()
+    if (!r.ok) conn.error = r.error
+    else conn.connect()
+  }
   let room = $derived(conn ? conn.rooms.find((r) => r.id === roomSel[conn.entry.address]) || conn.rooms[0] : null)
 
   function connect(entry) {
     const c = new Conn(entry)
     stream.attach(c)
     c.on('hello', () => voice.rejoined(c))
+    diag.attach(c)
     conns[entry.address] = c
     return c
   }
 
   onMount(async () => {
     info = await window.eris.info()
+    diag.setInfo(info)
     Conn.appVersion = info.version
     servers = await window.eris.loadServers()
     for (const s of servers) connect(s)
@@ -57,6 +84,7 @@
   }
 
   async function remove(address) {
+    if (conns[address]) diag.detach(conns[address])
     conns[address]?.close()
     delete conns[address]
     servers = servers.filter((s) => s.address !== address)
@@ -127,6 +155,21 @@
         await until(() => voice.tiles.some((t) => !t.local))
         console.info(`auto test: seeing ${voice.tiles.filter((t) => !t.local).map((t) => t.name).join(', ')}`)
       }
+      if (a.share) {
+        await voice.toggleShare()
+        console.info(`auto test: sharing ${voice.sharing}`)
+      }
+      if (a.watch) {
+        // Opt-in: a share is offered but nothing comes until Watch.
+        await until(() => voice.shares.some((s) => !s.local))
+        const s = voice.shares.find((s) => !s.local)
+        await new Promise((r) => setTimeout(r, 3000))
+        console.info(`auto test: ${s.name}'s share offered; received before Watch: ${voice.receivingShare(s.id)}`)
+        voice.watch(s.id)
+        await until(() => voice.stage?.track)
+        await until(() => (voice.stage.track.mediaStreamTrack?.getSettings().width || 0) > 0 || document.querySelector('.stage video')?.videoWidth > 0)
+        console.info(`auto test: watching ${s.name}'s screen`)
+      }
     }
     if (a.live) stream.goLive(c, { extraArgs: a.hostArgs })
     if (a.watch) {
@@ -170,6 +213,13 @@
         const r = await call('POST', `/api/admin/${what}`)
         return r.status === 200 ? { ok: true } : { ok: false, error: r.json?.error || `the server answered ${r.status}` }
       },
+      icon: () => c.iconUrl(),
+      setIcon: async (file) => {
+        const r = file
+          ? await window.eris.upload({ url: httpBase(c.entry.address) + '/api/admin/icon', token: c.entry.token, type: file.type, data: await file.arrayBuffer() })
+          : await call('DELETE', '/api/admin/icon')
+        return r.status === 200 ? { ok: true } : { ok: false, error: r.json?.error || `the server answered ${r.status}` }
+      },
     }
   }
 
@@ -211,26 +261,29 @@
 <div class="layout">
   <nav class="servers">
     {#each servers as s (s.address)}
-      <button class="icon" class:sel={s.address === selected} title={s.address} onclick={() => (selected = s.address)}>
-        {(conns[s.address]?.serverName || s.address).slice(0, 2)}
+      <button class="icon" class:sel={s.address === selected} class:pic={!!conns[s.address]?.icon} title={conns[s.address]?.serverName || s.address} onclick={() => (selected = s.address)}>
+        {#if conns[s.address]?.icon}
+          <img src={conns[s.address].iconUrl()} alt="" />
+        {:else}
+          {(conns[s.address]?.serverName || s.address).slice(0, 2)}
+        {/if}
         <span class="dot {conns[s.address]?.status}"></span>
       </button>
     {/each}
     <button class="icon add" title="Add a server" onclick={() => ((addInitial = {}), (adding = true))}>+</button>
     <span class="grow"></span>
-    <button class="icon host" class:sel={selected === HOST} title="Host a server on this PC" onclick={() => (selected = HOST)}>⌂</button>
+    <button class="icon gear" title="Settings: voice & video, your server, this server" onclick={() => (settings = 'voice')}>⚙</button>
   </nav>
 
-  {#if selected === HOST}
-    <main class="hostview">
-      <ServerPanel api={localApi} local title="Your server (on this PC)" appVersion={info.version} onjoin={joinOwn} listed={(st) => !!ownListed(st)} />
-    </main>
-  {:else if !conn}
+  {#if !conn}
     <main class="empty">
       <img src={logo} alt="" width="96" height="96" />
       <h1>Eris</h1>
       <p class="muted">Add a server to start: paste the join link its owner gave you, and your name.</p>
       <button class="primary" onclick={() => (adding = true)}>Add a server</button>
+      {#if hostInfo?.canHost}
+        <p class="muted">Or host your own: <button onclick={() => (settings = 'host')}>Host a server on this PC</button></p>
+      {/if}
     </main>
   {:else}
     <div class="server">
@@ -240,13 +293,6 @@
           <span class="muted">you are {conn.you?.name || conn.entry.name}{conn.you?.role === 'owner' ? ' (owner)' : ''} · {conn.status}{conn.serverVersion ? ` · server ${conn.serverVersion}` : ''} · app {info.version}</span>
         </div>
         <div class="actions">
-          {#if info.canHost}
-            {#if stream.hosting}
-              <button onclick={() => stream.stopLive()}>Stop streaming</button>
-            {:else}
-              <button class="primary" disabled={conn.status !== 'online'} onclick={() => stream.goLive(conn)}>Go Live</button>
-            {/if}
-          {/if}
           <button onclick={() => remove(conn.entry.address)} title="Remove this server from the list">Remove</button>
         </div>
       </header>
@@ -276,7 +322,12 @@
           </div>
         </div>
       {/if}
-      {#if conn.error}
+      {#if conn.status !== 'online' && isLocalServer(conn) && hostInfo && !hostInfo.running}
+        <div class="banner warn start">
+          <span>This is your server, on this PC, and it isn't running.</span>
+          <button class="primary" disabled={startingLocal} onclick={startLocal}>{startingLocal ? 'Starting...' : 'Start server'}</button>
+        </div>
+      {:else if conn.error}
         <div class="banner bad">{conn.error} <button class="x" onclick={() => (conn.error = '')}>×</button></div>
       {/if}
       {#if stream.notice}
@@ -287,23 +338,13 @@
         <Rooms
           {conn}
           selected={room?.id}
-          {view}
-          onview={(v) => (view = v)}
-          onselect={(id) => ((roomSel[conn.entry.address] = id), (view = 'chat'))}
+          onselect={(id) => (roomSel[conn.entry.address] = id)}
           onedit={(r) => (roomDialog = { room: r })}
           oncreate={() => (roomDialog = { room: null })}
-          onsettings={() => (deviceSettings = true)}
+          onsettings={() => (settings = 'voice')}
+          canHost={info.canHost}
         />
-        {#if view === 'server' && conn.you?.role === 'owner'}
-          {#key conn.entry.address}
-            <ServerPanel api={remoteApi(conn)} title={`Server: ${conn.serverName || conn.entry.address}`} appVersion={info.version} />
-          {/key}
-        {:else if view === 'tests'}
-          <section class="tests">
-            <h2>Stream tests</h2>
-            <Results results={conn.results} />
-          </section>
-        {:else if room}
+        {#if room}
           {#key room.id}<Chat {conn} {room} />{/key}
         {:else}
           <section class="tests muted">{conn.status === 'online' ? 'No rooms yet.' : 'Connecting...'}</section>
@@ -314,8 +355,19 @@
   {/if}
 </div>
 
-{#if deviceSettings}
-  <DeviceSettings onclose={() => (deviceSettings = false)} />
+<SharePicker />
+
+{#if settings}
+  <Settings
+    {conn}
+    info={{ ...info, canHostServer: !!hostInfo?.canHost }}
+    section={settings}
+    {localApi}
+    {remoteApi}
+    onjoin={(st) => ((settings = null), joinOwn(st))}
+    listed={(st) => !!ownListed(st)}
+    onclose={() => ((settings = null), checkHost())}
+  />
 {/if}
 
 {#if roomDialog}
@@ -332,10 +384,14 @@
   .servers { width: 64px; background: var(--bg); border-right: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px 0; flex: none; }
   .icon { position: relative; width: 44px; height: 44px; border-radius: 14px; padding: 0; text-transform: uppercase; font-weight: 600; }
   .icon.sel { background: var(--highlight); }
+  .icon.pic { padding: 0; overflow: visible; }
+  .icon.pic img { width: 44px; height: 44px; border-radius: 14px; object-fit: cover; display: block; }
+  .icon.pic.sel img { outline: 2px solid var(--highlight); outline-offset: 2px; }
   .icon.add { background: var(--surface-2); font-size: 20px; }
   .icon.host { background: var(--surface-2); font-size: 20px; }
   .grow { flex: 1; }
-  .hostview { flex: 1; display: flex; min-width: 0; }
+  .icon.gear { background: var(--surface-2); font-size: 20px; }
+  .banner.start { display: flex; border-left-color: var(--warn); }
   .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
   .icon .dot { position: absolute; right: -1px; bottom: -1px; border: 2px solid var(--bg); width: 12px; height: 12px; }
   .dot.online { background: var(--good); }

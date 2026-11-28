@@ -5,6 +5,10 @@
 //
 // Reading a room and being in its voice are separate: joining is deliberate
 // (double-click the room, or Join voice).
+//
+// Nothing is received automatically except voices and cameras: a screen
+// share is only sent to those who press Watch (LiveKit then sends it only
+// while someone watches), to keep traffic down.
 import { Room, RoomEvent, Track, VideoPresets } from 'livekit-client'
 import { httpBase } from './conn.svelte.js'
 
@@ -33,6 +37,10 @@ class Voice {
   camera = $state(false)
   people = $state([]) // {id, name, speaking, muted, camera, local}
   tiles = $state([]) // {id, name, track, local}: cameras on
+  shares = $state([]) // {id, name, local}: screens being shared
+  watching = $state('') // whose share we receive
+  stage = $state(null) // {id, name, track}: the share being watched
+  sharing = $state(false) // we share our screen
   error = $state('')
   hearing = $state(0) // others' audio tracks being played
   volumes = $state(store.get('volumes', {})) // member id -> 0..1
@@ -68,6 +76,8 @@ class Voice {
     })
     this.#room = room
     room
+      .on(RoomEvent.TrackPublished, (pub) => (this.#policy(pub), this.#refresh()))
+      .on(RoomEvent.TrackUnpublished, () => this.#refresh())
       .on(RoomEvent.TrackSubscribed, (track, pub, p) => this.#subscribed(track, pub, p))
       .on(RoomEvent.TrackUnsubscribed, (track) => this.#unsubscribed(track))
       .on(RoomEvent.ParticipantConnected, () => this.#refresh())
@@ -86,7 +96,8 @@ class Voice {
         }
       })
     try {
-      await room.connect(httpBase(conn.entry.address).replace(/^https/, 'wss'), r.json.token)
+      await room.connect(httpBase(conn.entry.address).replace(/^https/, 'wss'), r.json.token, { autoSubscribe: false })
+      for (const p of room.remoteParticipants.values()) for (const pub of p.trackPublications.values()) this.#policy(pub)
     } catch (err) {
       this.error = `Couldn't connect to the voice: ${err.message || err}`
       this.#reset()
@@ -141,6 +152,102 @@ class Voice {
       this.error = `Your camera couldn't be used (${err.message || err}).`
     }
     this.#refresh()
+  }
+
+  // Screen sharing: the window shows a picker (main/main.js asks it).
+  async toggleShare() {
+    if (!this.#room) return
+    try {
+      await this.#room.localParticipant.setScreenShareEnabled(
+        !this.sharing,
+        { audio: true, contentHint: 'detail', resolution: { width: 1920, height: 1080, frameRate: 30 } },
+        { videoEncoding: { maxBitrate: 4_000_000, maxFramerate: 30 } },
+      )
+    } catch (err) {
+      if (!/denied|cancel|abort/i.test(String(err.message || err))) this.error = `Couldn't share your screen (${err.message || err}).`
+    }
+    this.#refresh()
+  }
+
+  // watch receives one share (and stops receiving the one watched before).
+  watch(id) {
+    const room = this.#room
+    if (!room) return
+    if (this.watching && this.watching !== id) this.#subscribeShare(this.watching, false)
+    this.watching = id
+    this.#subscribeShare(id, true)
+    this.#refresh()
+  }
+
+  unwatch() {
+    if (this.watching) this.#subscribeShare(this.watching, false)
+    this.watching = ''
+    this.#refresh()
+  }
+
+  #subscribeShare(id, on) {
+    const p = this.#room?.remoteParticipants.get(String(id))
+    if (!p) return
+    for (const pub of p.trackPublications.values()) {
+      if (pub.source === Track.Source.ScreenShare || pub.source === Track.Source.ScreenShareAudio) pub.setSubscribed(on)
+    }
+  }
+
+  // #policy: voices and cameras come automatically; screen shares only when watched.
+  #policy(pub) {
+    if (!pub.setSubscribed) return // our own
+    if (pub.source === Track.Source.ScreenShare || pub.source === Track.Source.ScreenShareAudio) {
+      pub.setSubscribed(this.watching === pub.participantIdentity || this.watching === this.#ownerOf(pub))
+    } else {
+      pub.setSubscribed(true)
+    }
+  }
+
+  #ownerOf(pub) {
+    for (const p of this.#room?.remoteParticipants.values() || []) if (p.trackPublications.get(pub.trackSid) === pub) return p.identity
+    return ''
+  }
+
+  // stats: the call's connection, for diagnostics (diag.svelte.js): round
+  // trip and route, and for each track coming and going: loss, jitter,
+  // picture size and frame rate, bytes, and what limits our sending.
+  async stats() {
+    const room = this.#room
+    if (!room) return null
+    const out = { room: this.roomId, people: room.numParticipants, quality: room.localParticipant.connectionQuality, muted: this.muted, deafened: this.deafened, tracks: [] }
+    const read = async (track, from, source, dir) => {
+      if (!track?.getRTCStatsReport) return
+      const rep = await track.getRTCStatsReport()
+      if (!rep) return
+      rep.forEach((s) => {
+        if (s.type === 'inbound-rtp' || s.type === 'outbound-rtp') {
+          out.tracks.push({
+            dir, from, source, kind: s.kind,
+            lost: s.packetsLost, packets: s.packetsReceived ?? s.packetsSent, jitter_ms: s.jitter != null ? Math.round(s.jitter * 1000) : undefined,
+            fps: s.framesPerSecond, w: s.frameWidth, h: s.frameHeight, bytes: s.bytesReceived ?? s.bytesSent,
+            limited_by: s.qualityLimitationReason, codec: rep.get(s.codecId)?.mimeType,
+          })
+        } else if (s.type === 'candidate-pair' && s.nominated && s.state === 'succeeded' && out.rtt_ms == null) {
+          out.rtt_ms = Math.round((s.currentRoundTripTime || 0) * 1000)
+          const l = rep.get(s.localCandidateId)
+          const r = rep.get(s.remoteCandidateId)
+          out.route = `${l?.candidateType}/${l?.protocol} -> ${r?.candidateType}`
+        }
+      })
+    }
+    for (const p of room.remoteParticipants.values()) {
+      for (const pub of p.trackPublications.values()) await read(pub.track, p.name || p.identity, pub.source, 'in')
+    }
+    for (const pub of room.localParticipant.trackPublications.values()) await read(pub.track, 'me', pub.source, 'out')
+    return out
+  }
+
+  // receivingShare: whether someone's screen share is coming to us (tests:
+  // it mustn't before Watch).
+  receivingShare(id) {
+    const p = this.#room?.remoteParticipants.get(String(id))
+    const pub = p?.getTrackPublication(Track.Source.ScreenShare)
+    return !!pub?.isSubscribed
   }
 
   setVolume(id, v) {
@@ -237,11 +344,24 @@ class Voice {
       local: p === room.localParticipant,
     }))
     const tiles = []
+    const shares = []
+    let stage = null
     for (const p of all) {
+      const local = p === room.localParticipant
+      const name = p.name || p.identity
       const pub = p.getTrackPublication(Track.Source.Camera)
-      if (pub?.track && !pub.isMuted) tiles.push({ id: p.identity, name: p.name || p.identity, track: pub.track, local: p === room.localParticipant })
+      if (pub?.track && !pub.isMuted) tiles.push({ id: p.identity, name, track: pub.track, local })
+      const sh = p.getTrackPublication(Track.Source.ScreenShare)
+      if (sh) {
+        shares.push({ id: p.identity, name, local })
+        if (!local && this.watching === p.identity && sh.track) stage = { id: p.identity, name, track: sh.track }
+      }
     }
+    if (this.watching && !shares.some((s) => s.id === this.watching)) this.watching = '' // they stopped
     this.tiles = tiles
+    this.shares = shares
+    this.stage = stage
+    this.sharing = !!room.localParticipant.getTrackPublication(Track.Source.ScreenShare)
   }
 
   #reset() {
@@ -256,6 +376,10 @@ class Voice {
     this.deafened = false
     this.people = []
     this.tiles = []
+    this.shares = []
+    this.watching = ''
+    this.stage = null
+    this.sharing = false
   }
 }
 

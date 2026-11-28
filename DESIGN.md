@@ -209,7 +209,9 @@ focus), speaking indicators, per-person volume, cameras. *Built 2026-11-27, exce
 push-to-talk (later, by the user's choice):* LiveKit 1.13 run by eris-server
 (server/voice.go), livekit-client in the app (app/src/lib/voice.svelte.js), who's in each
 room's voice under the room, a voice bar (mute, deafen, camera, leave), camera tiles above
-the chat, and device settings. Voice uses the microphone through
+the chat, and device settings. Screen sharing (anyone, Windows too, opt-in watching:
+nothing is sent to those who haven't pressed Watch), server icons, Settings like Discord's,
+and automatic diagnostics (3 days of logs) followed on 2026-11-27. Voice uses the microphone through
 Electron with echo cancellation and noise suppression on.
 
 ---

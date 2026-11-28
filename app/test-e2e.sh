@@ -5,7 +5,8 @@
 # join link (so with the server's certificate fingerprint). They chat (a
 # message with a file and a picture each, over the encrypted connection),
 # join the first room's voice with cameras on (Chromium's fake microphone and
-# camera), then the host starts a stream test with the player; it passes when
+# camera); the host shares its screen and the player, after checking nothing
+# comes before it presses Watch, watches it; then the host starts a stream test with the player; it passes when
 # both messages arrived, each hears and sees the other, and both sides'
 # results are stored on the server.
 #
@@ -41,12 +42,12 @@ Xvfb :98 -screen 0 1920x1080x24 -nolisten tcp >/dev/null 2>&1 & pids+=($!)
 sleep 1
 DISPLAY=:97 $R/helper/bin/ptclock -busy -pattern shapes -noise 128 -w 2560 -h 1440 >/dev/null 2>&1 & pids+=($!)
 cd $R/app
-ERIS_FAKE_MEDIA=1 ERIS_PROFILE=e2e-host DISPLAY=:97 npx electron . --no-sandbox --disable-gpu \
-  --auto="{\"join\":{\"link\":\"$LINK\",\"name\":\"Host\",\"ownerCode\":\"$CODE\"},\"say\":\"hello from Host\",\"expect\":\"hello from Player\",\"voice\":true,\"camera\":true,\"live\":true,\"testWith\":\"Player\",\"seconds\":$SECS$HOSTX}" \
+ERIS_FAKE_MEDIA=1 ERIS_AUTO_SHARE=1 ERIS_PROFILE=e2e-host DISPLAY=:97 npx electron . --no-sandbox --disable-gpu \
+  --auto="{\"join\":{\"link\":\"$LINK\",\"name\":\"Host\",\"ownerCode\":\"$CODE\"},\"say\":\"hello from Host\",\"expect\":\"hello from Player\",\"voice\":true,\"camera\":true,\"share\":true,\"live\":true,\"testWith\":\"Player\",\"seconds\":$SECS$HOSTX}" \
   > $T/app-host.log 2>&1 & pids+=($!)
 sleep 2
 ERIS_FAKE_MEDIA=1 ERIS_PROFILE=e2e-player DISPLAY=:98 npx electron . --no-sandbox --disable-gpu \
-  --auto="{\"join\":{\"link\":\"$LINK\",\"name\":\"Player\"},\"say\":\"hello from Player\",\"expect\":\"hello from Host\",\"voice\":true,\"camera\":true$PLAYERX}" > $T/app-player.log 2>&1 & pids+=($!)
+  --auto="{\"join\":{\"link\":\"$LINK\",\"name\":\"Player\"},\"say\":\"hello from Player\",\"expect\":\"hello from Host\",\"voice\":true,\"camera\":true,\"watch\":true$PLAYERX}" > $T/app-player.log 2>&1 & pids+=($!)
 for i in $(seq 1 $((SECS + 70))); do
   n=$(ls $T/data/tests 2>/dev/null | wc -l)
   [ "$n" -ge 2 ] && break
@@ -64,10 +65,17 @@ echo "== chat messages received with their files: $chat of 2"
 heard=$(cat $T/logs-host/app.log $T/logs-player/app.log 2>/dev/null | grep -c "auto test: hearing")
 seen=$(cat $T/logs-host/app.log $T/logs-player/app.log 2>/dev/null | grep -c "auto test: seeing")
 echo "== voice: $heard of 2 hear the other; cameras: $seen of 2 see the other"
-if [ "$n" -ge 2 ] && [ "$chat" -ge 2 ] && [ "$heard" -ge 2 ] && [ "$seen" -ge 2 ]; then
+optin=$(cat $T/logs-player/app.log 2>/dev/null | grep -c "share offered; received before Watch: false")
+watched=$(cat $T/logs-player/app.log 2>/dev/null | grep -c "auto test: watching")
+echo "== screen share: nothing received before Watch: $optin of 1; watched: $watched of 1"
+sleep 12 # the apps send diagnostics every 10 s
+diagfiles=$(ls $T/data/logs/diag-*.jsonl 2>/dev/null | wc -l)
+voicediag=$(cat $T/data/logs/diag-*.jsonl 2>/dev/null | grep -c '"kind":"voice"')
+echo "== diagnostics: files for $diagfiles of 2 members; voice stats entries: $voicediag"
+if [ "$n" -ge 2 ] && [ "$chat" -ge 2 ] && [ "$heard" -ge 2 ] && [ "$seen" -ge 2 ] && [ "$optin" -ge 1 ] && [ "$watched" -ge 1 ] && [ "$diagfiles" -ge 2 ] && [ "$voicediag" -ge 2 ]; then
   echo "PASS"
   rm -rf "$T" # the logs are only kept when it fails
 else
-  echo "FAIL: expected both sides' results, both chat messages, and voice and cameras both ways"
+  echo "FAIL: expected both sides' results, both chat messages, voice and cameras both ways, an opt-in screen share watched, and both apps' diagnostics"
   exit 1
 fi

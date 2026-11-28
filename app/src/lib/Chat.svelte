@@ -6,6 +6,7 @@
   // in asks for its password, or says it's for listed members.
   import { tick } from 'svelte'
   import { voice, attach } from './voice.svelte.js'
+  import { stream } from './stream.svelte.js'
 
   let { conn, room } = $props()
 
@@ -18,6 +19,15 @@
   let list = $state(null)
   let input = $state(null)
   let picker = $state(null)
+  let stageEl = $state(null)
+
+  // Members live for Play Together who are in this room's voice (and us).
+  let liveHere = $derived(
+    Object.keys(conn.live)
+      .map(Number)
+      .filter((id) => conn.voice[id] === room.id || id === conn.you?.id)
+      .map((id) => ({ id, name: conn.member(id)?.name || '?' })),
+  )
   let preview = $state(null) // image url shown large
 
   let chat = $derived(conn.chat[room.id])
@@ -171,6 +181,45 @@
       {/if}
     {/if}
   </header>
+  {#if voice.isIn(conn, room.id) && (voice.shares.length || liveHere.length)}
+    <div class="cards">
+      {#each voice.shares as s (s.id)}
+        <div class="card">
+          <span>📺 <b>{s.local ? 'You are' : `${s.name} is`}</b> sharing {s.local ? 'your' : 'their'} screen</span>
+          {#if s.local}
+            <button onclick={() => voice.toggleShare()}>Stop sharing</button>
+          {:else if voice.watching === s.id}
+            <button onclick={() => voice.unwatch()}>Stop watching</button>
+          {:else}
+            <button class="primary" onclick={() => voice.watch(s.id)}>Watch</button>
+          {/if}
+        </div>
+      {/each}
+      {#each liveHere as m (m.id)}
+        <div class="card">
+          <span>🎮 <b>{m.id === conn.you?.id ? 'You are' : `${m.name} is`}</b> live for Play Together <span class="muted">{conn.live[m.id]?.title || ''}</span></span>
+          {#if m.id === conn.you?.id}
+            <button onclick={() => stream.stopLive()}>Stop</button>
+          {:else if stream.playing?.hostId === m.id}
+            <button onclick={() => stream.leave()}>Leave</button>
+          {:else}
+            <button class="primary" onclick={() => stream.join(conn, m.id)} title="Opens their game in a window; your controller plays">Join</button>
+          {/if}
+        </div>
+      {/each}
+    </div>
+  {/if}
+  {#if voice.isIn(conn, room.id) && voice.stage}
+    <div class="stage" bind:this={stageEl}>
+      <div class="screen" use:attach={voice.stage.track}></div>
+      <div class="stagebar">
+        <span>{voice.stage.name}'s screen</span>
+        <span class="grow"></span>
+        <button onclick={() => stageEl.requestFullscreen()}>Fullscreen</button>
+        <button onclick={() => voice.unwatch()}>Stop watching</button>
+      </div>
+    </div>
+  {/if}
   {#if voice.isIn(conn, room.id) && voice.tiles.length}
     <div class="tiles">
       {#each voice.tiles as t (t.id + (t.local ? '-me' : ''))}
@@ -274,6 +323,15 @@
   .grow { flex: 1; }
   .invoice { color: var(--good); font-size: 12px; font-weight: 600; }
   .joinvoice { padding: 4px 12px; font-size: 13px; }
+  .cards { display: grid; gap: 6px; padding: 10px 18px 0; }
+  .card { display: flex; align-items: center; gap: 10px; justify-content: space-between; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 10px; }
+  .card button { padding: 4px 12px; font-size: 13px; }
+  .stage { margin: 10px 18px 0; background: #000; border-radius: var(--radius); overflow: hidden; display: flex; flex-direction: column; }
+  .stage .screen { flex: 1; display: grid; place-items: center; min-height: 0; }
+  .stage .screen :global(video) { width: 100%; max-height: 52vh; object-fit: contain; display: block; }
+  .stage:fullscreen .screen :global(video) { max-height: none; height: calc(100vh - 44px); }
+  .stagebar { display: flex; gap: 8px; align-items: center; padding: 6px 10px; background: rgba(255, 255, 255, 0.05); font-size: 13px; }
+  .stagebar button { padding: 3px 10px; font-size: 12px; }
   .tiles { display: flex; gap: 8px; padding: 10px 18px; border-bottom: 1px solid var(--border); overflow-x: auto; background: #10101f; }
   .tile { position: relative; width: 240px; aspect-ratio: 16 / 9; background: #000; border-radius: var(--radius); overflow: hidden; flex: none; }
   .tile :global(video) { width: 100%; height: 100%; object-fit: cover; display: block; }

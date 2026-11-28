@@ -33,11 +33,6 @@
             {/if}
           </div>
         {/if}
-        {#if stream.hosting && m.online && m.id !== conn.you?.id}
-          <div class="live">
-            <button onclick={() => stream.testWith(conn, m.id, 60)} title="They join your stream for 60 s; both sides' results are saved">Stream test</button>
-          </div>
-        {/if}
       {/each}
     {/if}
   {/each}

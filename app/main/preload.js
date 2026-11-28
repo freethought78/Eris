@@ -13,7 +13,14 @@ contextBridge.exposeInMainWorld('eris', {
   hostStart: () => ipcRenderer.invoke('host-start'),
   hostAction: (what) => ipcRenderer.invoke('host-action', what),
   hostLog: () => ipcRenderer.invoke('host-log'),
+  logTail: (file) => ipcRenderer.invoke('log-tail', file),
   hostAddIcon: () => ipcRenderer.invoke('host-add-icon'),
+  onPickShare: (fn) => {
+    const h = (_e, data) => fn(data)
+    ipcRenderer.on('pick-share', h)
+    return () => ipcRenderer.removeListener('pick-share', h)
+  },
+  sharePicked: (n, id, audio) => ipcRenderer.invoke('share-picked', { n, id, audio }),
   startHelper: (role, opts) => ipcRenderer.invoke('helper-start', { role, opts }),
   stopHelper: (role) => ipcRenderer.invoke('helper-stop', role),
   sendHelper: (role, msg) => ipcRenderer.invoke('helper-send', { role, msg }),

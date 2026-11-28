@@ -1,10 +1,10 @@
 <script>
-  // Audio and video settings: which microphone, speakers and camera Eris
-  // uses (kept on this PC). Echo cancellation and noise suppression are on.
+  // Voice & video settings (a section of Settings): which microphone,
+  // speakers and camera Eris uses (kept on this PC). Echo cancellation and
+  // noise suppression are on.
   import { onMount } from 'svelte'
   import { voice } from './voice.svelte.js'
 
-  let { onclose } = $props()
   let devices = $state(null)
 
   onMount(async () => {
@@ -27,9 +27,8 @@
   ]
 </script>
 
-<div class="backdrop">
-  <div class="dialog">
-    <h3>Audio and video</h3>
+<div class="devices">
+  <h2>Voice & video</h2>
     {#if !devices}
       <p class="muted">Looking for your devices...</p>
     {:else}
@@ -46,16 +45,12 @@
       {/each}
       <p class="muted small">Echo cancellation and noise suppression are on. Changes apply straight away, also in a call.</p>
     {/if}
-    <div class="row"><button class="primary" onclick={onclose}>Done</button></div>
-  </div>
 </div>
 
 <style>
-  .backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55); display: grid; place-items: center; z-index: 5; }
-  .dialog { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px; width: 420px; display: grid; gap: 12px; }
-  h3 { margin: 0 0 4px; }
+  .devices { display: grid; gap: 14px; max-width: 460px; }
+  h2 { margin: 0; font-size: 18px; text-transform: none; letter-spacing: 0; color: var(--text); }
   label { display: grid; gap: 4px; font-size: 13px; }
   select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 8px; }
   .small { font-size: 12px; margin: 0; }
-  .row { display: flex; justify-content: flex-end; }
 </style>

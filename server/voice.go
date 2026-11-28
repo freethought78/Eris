@@ -133,16 +133,12 @@ room:
 		lk.why = err.Error()
 		return lk
 	}
-	logf, err := os.OpenFile(filepath.Join(dir, "livekit.log"), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
-	if err != nil {
-		lk.why = err.Error()
-		return lk
-	}
+	os.Remove(filepath.Join(dir, "livekit.log")) // from before logs/
+	logf := newDailyLog(logDir(dir), "livekit", "log")
 	cmd := exec.Command(bin, "--config", confPath)
 	cmd.Stdout, cmd.Stderr = logf, logf
 	cmd.SysProcAttr = childProcAttr() // it goes when we go, however we go (Linux)
 	if err := cmd.Start(); err != nil {
-		logf.Close()
 		lk.why = err.Error()
 		log.Printf("voice: off (couldn't start LiveKit: %v)", err)
 		return lk
@@ -150,14 +146,13 @@ room:
 	lk.cmd = cmd
 	go func() {
 		err := cmd.Wait()
-		logf.Close()
 		lk.mu.Lock()
 		was := lk.on
 		lk.on, lk.cmd = false, nil
 		lk.why = "LiveKit stopped"
 		lk.mu.Unlock()
 		if was {
-			log.Printf("voice: LiveKit stopped (%v); see livekit.log in the data folder", err)
+			log.Printf("voice: LiveKit stopped (%v); see logs/livekit-*.log in the data folder", err)
 		}
 	}()
 	// Ready when it answers on its port.
@@ -178,7 +173,7 @@ room:
 		time.Sleep(200 * time.Millisecond)
 	}
 	lk.why = "LiveKit didn't start"
-	log.Printf("voice: off (LiveKit didn't start; see livekit.log in the data folder)")
+	log.Printf("voice: off (LiveKit didn't start; see logs/livekit-*.log in the data folder)")
 	lk.stop()
 	return lk
 }

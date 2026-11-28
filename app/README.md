@@ -1,12 +1,12 @@
 # Eris app
 
 The Electron app (DESIGN.md section 4), Svelte 5 with plain JavaScript in the
-main process. This first build: a server list (add by address and name,
-plus the owner code the first time), members and who's online, **Go Live**
-(Linux for now) and **Join** for a live member, and **Stream test** while
-you're live: the other member joins for 60 s and both sides' results come
-back to the server and show in the *Stream tests* table (click a row for
-details).
+main process: a server list (add with a join link), rooms with chat, files,
+voice, cameras and screen sharing, members, Play Together (**Go Live** on
+Linux, **Join** anywhere), Settings, and hosting a server on this PC. The user
+manual is the README at the top of the repository. Stream tests (a member
+joins for a set time and both sides' measurements go to the server) are now
+only for automated tests (`testWith` below): live tests rely on diagnostics.
 
 Streaming is done by the helper (`../helper`), started by the main process
 and talked to in JSON lines; connection setup between the two helpers goes
@@ -36,8 +36,7 @@ ones, a dot for unread), the room's chat in the middle (history loads as you
 scroll up; Enter sends, Shift+Enter is a new line, Up edits your last message;
 files by the + button, drag and drop or paste, pictures shown in place), and
 members on the right with Join for anyone live. Owners and admins add rooms
-with + and change them with the gear. Stream tests are at the bottom of the
-rooms list. Links in messages open in the browser.
+with + and change them with the gear. Links in messages open in the browser.
 
 **Encryption:** all calls to servers go through the main process, which pins
 each server's certificate (`pins.json` in the app's data folder; see DESIGN.md
@@ -59,46 +58,49 @@ new connection while the old one was still closing. Each helper run now has
 its own number in the app, a stopped helper ends its run and reports, and
 the host replaces a member's old session when they connect again.
 
-## Hosting a server
+## Settings and hosting a server
 
-Everything is done from the app; the server itself is just a terminal
-window. **Host** (the ⌂ at the bottom of the server list) shows the server on
-this PC: **Start server** opens it in its own terminal window (gnome-terminal,
-konsole, xterm... on Linux; a console on Windows), which stays open as long as
-it runs and keeps running when the app closes. Closing that window stops the
-server, cleanly. The window shows the join link, the owner code until it's
-used, a status line (who's online, streaming, updates) and the log; typing
-`update` there checks for a newer server.
+**⚙** opens Settings (`src/lib/Settings.svelte`), like Discord's: Voice & video
+(devices), Your server (this PC), Server: (name) for owners, and About Eris
+(version, updates, diagnostics).
 
-While it runs, Host shows its version, uptime, who's online, its update
-state, the join link (with Copy), the owner code and its log, with **Check
-for updates**, **Restart** and **Stop server**. Check for updates updates
-the server (it installs a newer one and restarts straight away) and the app
-together. If the server isn't in your list yet, **Join it** fills in its link
-and owner code. Owners get the same view for their server from any PC under
-**Server**, at the bottom of the rooms list (everything but Start, which only
-works on the PC the server runs on). A server from before these controls
-(0.1.4 and older) shows as running but can't be controlled until it updates.
+**Your server (this PC)** starts the server in its own terminal window
+(gnome-terminal, konsole, xterm... on Linux; a console on Windows), which stays
+open as long as it runs and keeps running when the app closes; closing that
+window stops it, cleanly. It shows the server's version, uptime, who's online,
+updates, the join link, the owner code and its log, with **Check for updates**
+(server and app together), **Restart** and **Stop server**, and **Join it** if
+it isn't in your list yet. When the server in view is this PC's and it isn't
+running, its page offers **Start server**. **Server: (name)** gives an owner the
+same from any PC (not Start), and the server's icon.
 
 The app talks to this PC's server with the control token the server leaves in
-its data folder (readable only by this PC's user) and trusts only the
-certificate in that folder; owners elsewhere use their member token (see
-server/control.go).
+its data folder and trusts only that folder's certificate; owners elsewhere use
+their member token (server/control.go). The server runs from an updatable copy,
+`~/.config/Eris-server/bin/`, refreshed from the one the app carries (with
+LiveKit beside it). Settings: `~/.config/Eris-server/host.json` (`data`, `addr`,
+`public`, `media_port`), written the first time a server is started.
+`Eris --server` starts the server in its window and exits.
 
-The server updates itself, so it runs from a copy it can replace,
-`~/.config/Eris-server/bin/eris-server`, which the app refreshes from the
-server it carries (Linux AppImage: `resources/server/eris-server`) when that's
-newer. From the source folder it runs `../server/bin/eris-server`. Settings
-are in `~/.config/Eris-server/host.json`: `data` (default
-`~/.config/Eris-server/server-data`), `addr` (`:7300`) and `public` (the name
-in the join link).
+The app follows its servers for updates: it checks when a server it connects
+to is newer, and when you press Check for updates.
 
-`Eris --server` starts the server in its window and exits, without the app:
-for a desktop shortcut that starts only the server.
+## Voice, cameras and screen sharing
 
-The app no longer checks for its own updates on a timer: it follows its
-servers. It checks when a server it connects to is newer, and when you press
-Check for updates.
+`src/lib/voice.svelte.js` (livekit-client): one room's voice at a time; voices
+and cameras are received automatically, screen shares only after **Watch** (so
+nothing is sent to those not watching). Sharing uses Electron's display-media
+handler with the app's own picker (`main/main.js`, `SharePicker.svelte`);
+sound with a share is Windows only. Go Live (Play Together) is 🎮 in the panel
+under the rooms.
+
+## Diagnostics and logs
+
+`src/lib/diag.svelte.js` sends the server each concerns: the window's console,
+errors, voice stats every 10 s, Play Together sessions' summaries and log tails
+(never messages); Settings, About Eris turns it off. The app's own logs (`logs/`
+in its data folder: `app.log` for today, older days renamed, helper sessions'
+logs) are kept for 3 days, and a day's `app.log` stops at 100 MB.
 
 ## Icon
 

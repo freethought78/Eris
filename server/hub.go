@@ -39,6 +39,7 @@ import (
 //	{"type":"message","message":{...}}  {"type":"message-edit","message":{...}}
 //	{"type":"message-delete","id":ID,"room_id":ID}
 //	{"type":"voice","member_id":ID,"room_id":ID}  (0: left), to those who can see the room
+//	{"type":"server","server":{"name":"...","icon":"hash"}}  (the icon changed)
 //	{"type":"rooms","rooms":[...]}  (each member's own view: which they can go in)
 //	{"type":"error","error":"..."}
 //
@@ -157,7 +158,7 @@ func (h *Hub) hello(you Member) ([]byte, error) {
 		voiceOn, _ = h.lk.enabled()
 	}
 	return encode(map[string]any{"type": "hello", "you": you, "members": view, "live": live, "rooms": rooms, "voice": voice,
-		"server": map[string]any{"name": st.Name, "version": version, "max_file_mb": st.maxFile() >> 20, "voice": voiceOn}}), nil
+		"server": map[string]any{"name": st.Name, "version": version, "max_file_mb": st.maxFile() >> 20, "voice": voiceOn, "icon": st.IconHash}}), nil
 }
 
 func (h *Hub) add(c *client) {

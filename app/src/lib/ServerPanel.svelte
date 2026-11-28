@@ -50,6 +50,15 @@
     setTimeout(refresh, 800)
   }
 
+  let iconPicker = $state(null)
+
+  async function setIcon(file) {
+    error = ''
+    if (file && file.size > 1024 * 1024) return (error = 'The icon can be up to 1 MB.')
+    const r = await api.setIcon(file)
+    if (!r.ok) error = r.error
+  }
+
   async function addIcon() {
     const r = await window.eris.hostAddIcon()
     if (!r?.ok) error = r?.error || "Couldn't add the icon."
@@ -148,6 +157,15 @@
       </b>
       <span class="muted">Up</span><b>{uptime(st.started)}</b>
       <span class="muted">Online</span><b>{st.online?.length ? st.online.join(', ') : 'nobody'}{st.live ? ` · ${st.live} streaming` : ''}</b>
+      {#if api.setIcon}
+        <span class="muted">Icon</span>
+        <b class="iconrow">
+          {#if api.icon()}<img src={api.icon()} alt="" />{:else}<span class="muted">none: the list shows its first letters</span>{/if}
+          <button class="mini" onclick={() => iconPicker.click()}>{api.icon() ? 'Change' : 'Choose a picture'}</button>
+          {#if api.icon()}<button class="mini" onclick={() => setIcon(null)}>Remove</button>{/if}
+          <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden bind:this={iconPicker} onchange={(e) => (setIcon(e.target.files[0]), (e.target.value = ''))} />
+        </b>
+      {/if}
       <span class="muted">Join link</span>
       <b class="link">{st.join_link} <button class="mini" onclick={() => copy(st.join_link)}>{copied ? 'Copied' : 'Copy'}</button></b>
       {#if st.owner_code}
@@ -176,6 +194,8 @@
   .stop { background: var(--highlight); border-color: var(--highlight); font-weight: 600; }
   .facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; background: var(--surface); border-radius: var(--radius); padding: 12px 16px; }
   .facts b { font-weight: 600; user-select: text; word-break: break-all; }
+  .iconrow { display: flex; align-items: center; gap: 6px; }
+  .iconrow img { width: 40px; height: 40px; border-radius: 12px; object-fit: cover; }
   .link { font-family: ui-monospace, monospace; font-size: 12px; }
   .mini { padding: 2px 8px; font-size: 12px; margin-left: 6px; font-family: system-ui, sans-serif; }
   .note { background: var(--surface-2); border-left: 3px solid var(--good); padding: 8px 12px; border-radius: var(--radius); margin: 0; }
