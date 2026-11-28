@@ -457,11 +457,15 @@ func chatRoutes(mux *http.ServeMux, store *Store, hub *Hub) {
 			http.Error(w, "this file is gone (files are kept for a while, then removed)", http.StatusNotFound)
 			return
 		}
-		// Only common pictures are shown in place; everything else is a
-		// download, never run or rendered by the app.
+		// Common pictures, audio and video are shown in place; everything else
+		// is a download, never run or rendered by the app.
 		typ, disp := "application/octet-stream", "attachment"
 		switch f.Type {
-		case "image/png", "image/jpeg", "image/gif", "image/webp":
+		case "image/png", "image/jpeg", "image/gif", "image/webp",
+			// Audio and video play in the chat (and can be skipped through:
+			// ServeFile answers range requests).
+			"audio/mpeg", "audio/mp3", "audio/ogg", "audio/wav", "audio/x-wav", "audio/wave", "audio/mp4", "audio/x-m4a",
+			"audio/aac", "audio/flac", "audio/x-flac", "audio/webm", "audio/opus", "video/mp4", "video/webm", "video/ogg":
 			typ, disp = f.Type, "inline"
 		}
 		w.Header().Set("Content-Type", typ)

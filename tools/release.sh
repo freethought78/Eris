@@ -52,9 +52,12 @@ done
 # (copied in beside it and renamed over it: a dev server may be running from it)
 mkdir -p "$R/server/bin" && cp "$OUT/eris-server-linux-amd64" "$R/server/bin/eris-server.new" &&
   mv -f "$R/server/bin/eris-server.new" "$R/server/bin/eris-server"
-# and LiveKit beside it, for voice and cameras (tools/livekit-version).
+# and LiveKit beside it, for voice and cameras (tools/livekit-version). The
+# release carries LiveKit too, for servers that update themselves.
 LK=$("$R/tools/livekit.sh" linux) && cp -f "$LK" "$R/server/bin/livekit-server.new" &&
   mv -f "$R/server/bin/livekit-server.new" "$R/server/bin/livekit-server"
+cp "$LK" "$OUT/livekit-server-linux-amd64"
+cp "$("$R/tools/livekit.sh" windows)" "$OUT/livekit-server-windows-amd64.exe"
 echo "== helper"
 (cd "$R/helper" && go build -o bin/ ./cmd/... && ./build-windows.sh >/dev/null)
 

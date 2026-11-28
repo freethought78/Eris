@@ -29,15 +29,19 @@ func TestNewer(t *testing.T) {
 func TestSelfUpdate(t *testing.T) {
 	newBin := []byte("#!/bin/sh\necho new server\n")
 	sum := sha256.Sum256(newBin)
-	sums := fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), assetName())
+	lkBin := []byte("livekit")
+	lkSum := sha256.Sum256(lkBin)
+	sums := fmt.Sprintf("%s  %s\n%s  %s\n", hex.EncodeToString(sum[:]), assetName(), hex.EncodeToString(lkSum[:]), liveKitAsset())
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/latest":
-			fmt.Fprintf(w, `{"tag_name":"v9.9.9","assets":[{"name":%q,"browser_download_url":"%s/bin"},{"name":"SHA256SUMS","browser_download_url":"%s/sums"}]}`,
-				assetName(), srv.URL, srv.URL)
+			fmt.Fprintf(w, `{"tag_name":"v9.9.9","assets":[{"name":%q,"browser_download_url":"%s/bin"},{"name":%q,"browser_download_url":"%s/lk"},{"name":"SHA256SUMS","browser_download_url":"%s/sums"}]}`,
+				assetName(), srv.URL, liveKitAsset(), srv.URL, srv.URL)
 		case "/bin":
 			w.Write(newBin)
+		case "/lk":
+			w.Write(lkBin)
 		case "/sums":
 			fmt.Fprint(w, sums)
 		}
@@ -54,6 +58,9 @@ func TestSelfUpdate(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(exe + ".old"); string(b) != "old" {
 		t.Fatalf("old program not kept: %q", b)
+	}
+	if b, _ := os.ReadFile(filepath.Join(filepath.Dir(exe), "livekit-server")); string(b) != "livekit" {
+		t.Fatalf("LiveKit didn't come with the update: %q", b)
 	}
 
 	sums = fmt.Sprintf("%s  %s\n", hex.EncodeToString(make([]byte, 32)), assetName()) // wrong checksum

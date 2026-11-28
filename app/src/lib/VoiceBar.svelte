@@ -4,6 +4,18 @@
   // who you are, Go Live (Play Together, on Linux) and ⚙ for settings.
   import { voice } from './voice.svelte.js'
   import { stream } from './stream.svelte.js'
+  import Mic from '@lucide/svelte/icons/mic'
+  import MicOff from '@lucide/svelte/icons/mic-off'
+  import Headphones from '@lucide/svelte/icons/headphones'
+  import HeadphoneOff from '@lucide/svelte/icons/headphone-off'
+  import Video from '@lucide/svelte/icons/video'
+  import VideoOff from '@lucide/svelte/icons/video-off'
+  import MonitorUp from '@lucide/svelte/icons/monitor-up'
+  import PhoneOff from '@lucide/svelte/icons/phone-off'
+  import Gamepad from '@lucide/svelte/icons/gamepad-2'
+  import Settings from '@lucide/svelte/icons/settings'
+
+  const I = 18 // icon size
 
   // conn: the server shown; canHost: this PC can go live (Linux, for now).
   let { onsettings, conn, canHost = false } = $props()
@@ -22,11 +34,19 @@
         <span class="room">#{roomName} · {voice.conn?.serverName || ''}</span>
       </div>
       <div class="buttons">
-        <button class:on={voice.muted} title={voice.muted ? 'Unmute' : 'Mute'} onclick={() => voice.toggleMute()}>{voice.muted ? '🔇' : '🎤'}</button>
-        <button class:on={voice.deafened} title={voice.deafened ? 'Undeafen' : 'Deafen (hear nobody, and mute)'} onclick={() => voice.toggleDeafen()}>{voice.deafened ? '🔕' : '🎧'}</button>
-        <button class:lit={voice.camera} title={voice.camera ? 'Turn your camera off' : 'Turn your camera on'} onclick={() => voice.toggleCamera()}>📷</button>
-        <button class:lit={voice.sharing} title={voice.sharing ? 'Stop sharing your screen' : 'Share your screen or a window (people in the room choose to watch it)'} onclick={() => voice.toggleShare()}>🖵</button>
-        <button class="leave" title="Leave the voice" onclick={() => voice.leave()}>✕</button>
+        <button class:on={voice.muted} title={voice.muted ? 'Unmute' : 'Mute'} onclick={() => voice.toggleMute()}>
+          {#if voice.muted}<MicOff size={I} />{:else}<Mic size={I} />{/if}
+        </button>
+        <button class:on={voice.deafened} title={voice.deafened ? 'Undeafen' : 'Deafen (hear nobody, and mute)'} onclick={() => voice.toggleDeafen()}>
+          {#if voice.deafened}<HeadphoneOff size={I} />{:else}<Headphones size={I} />{/if}
+        </button>
+        <button class:lit={voice.camera} title={voice.camera ? 'Turn your camera off' : 'Turn your camera on'} onclick={() => voice.toggleCamera()}>
+          {#if voice.camera}<Video size={I} />{:else}<VideoOff size={I} />{/if}
+        </button>
+        <button class:lit={voice.sharing} title={voice.sharing ? 'Stop sharing your screen' : 'Share your screen or a window (people in the room choose to watch it)'} onclick={() => voice.toggleShare()}>
+          <MonitorUp size={I} />
+        </button>
+        <button class="leave" title="Leave the voice" onclick={() => voice.leave()}><PhoneOff size={I} /></button>
       </div>
     </div>
   {/if}
@@ -34,12 +54,12 @@
     <span class="name">{conn?.you?.name || ''}</span>
     {#if canHost && conn}
       {#if stream.hosting}
-        <button class="lit" title="Stop Play Together" onclick={() => stream.stopLive()}>🎮</button>
+        <button class="lit" title="Stop Play Together" onclick={() => stream.stopLive()}><Gamepad size={I} /></button>
       {:else}
-        <button title="Go live for Play Together: low-latency game streaming; players join with their controllers" disabled={conn.status !== 'online'} onclick={() => stream.goLive(conn)}>🎮</button>
+        <button title="Go live for Play Together: low-latency game streaming; players join with their controllers" disabled={conn.status !== 'online'} onclick={() => stream.goLive(conn)}><Gamepad size={I} /></button>
       {/if}
     {/if}
-    <button title="Settings: voice & video, your server, this server" onclick={onsettings}>⚙</button>
+    <button title="Settings: voice & video, your server, this server" onclick={onsettings}><Settings size={I} /></button>
   </div>
 </div>
 
@@ -51,7 +71,7 @@
   .status.ok { color: var(--good); }
   .room { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .buttons { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; }
-  button { padding: 4px 0; font-size: 14px; background: var(--surface-2); min-width: 0; }
+  button { padding: 0; height: 32px; display: grid; place-items: center; background: var(--surface-2); min-width: 0; }
   button.on { background: var(--highlight); }
   button.lit { background: var(--good); }
   .leave { background: var(--highlight); }

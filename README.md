@@ -58,8 +58,9 @@ The first time you open a private room, Eris asks for its password; you only giv
 ## Chatting
 
 - **Enter** sends, **Shift+Enter** starts a new line, **Up** edits your last message.
-- Attach files with the **+** button, by dragging them in, or by pasting. Pictures show in
-  the chat (click one to see it full size); other files get a *Save* button.
+- Attach files with the **+** button, by dragging them in, or by pasting: they're sent
+  straight away (with anything you've typed). Pictures show in the chat (click one to see
+  it full size), audio and videos play in it, and other files get a *Save* button.
 - Links open in your browser. A dot next to a room means there's something new in it.
 
 ## Talking, cameras and sharing your screen
@@ -68,14 +69,17 @@ The first time you open a private room, Eris asks for its password; you only giv
   its chat (or the speaker that appears when you point at a room). You can read another
   room's chat while you talk in one.
 - Who's in each room's voice is listed under the room; a green light shows who's speaking.
-- The panel at the bottom of the rooms list has **mute** (🎤), **deafen** (🎧: hear nobody,
-  and mute), **camera** (📷), **share your screen** (🖵) and **leave** (✕). Cameras show
-  above the room's chat.
+- The panel at the bottom of the rooms list has **mute**, **deafen** (hear nobody, and
+  mute), **camera**, **share your screen** and **leave** (point at a button for its name).
+  Cameras and shares show above the room's chat: click one to make it big, drag the bar
+  under it to resize, and double-click (or its button) for fullscreen. Your own share shows
+  too, as others see it.
 - **Sharing your screen:** pick a whole screen or one window (on Windows, tick *Share
   sound too* to include its sound). Others in the room see a card saying you're sharing,
   and only those who press **Watch** receive it, so nobody's connection carries a share
-  they aren't watching. Watching opens it above the chat, with **Fullscreen**.
-- Click someone's name under the room to change how loud they are (just for you).
+  they aren't watching. Watching opens it big above the chat.
+- Click someone's name under the room to change how loud they are, from silent to 300%
+  (just for you; a limiter keeps loud moments from crackling).
 
 ## Settings
 
@@ -126,7 +130,9 @@ days.
 On Linux, press **🎮** in the panel under the rooms to go live: low-latency streaming of
 your main screen, for playing together. Members in your room's voice see a card saying
 you're live and press **Join** (or Join next to your name in the members list): the game
-opens in a window on their PC, and their controller works in your game.
+opens in a window on their PC (F11, Alt+Enter or a double-click for fullscreen), and their
+controller works in your game. If you use Mullvad, Eris runs your server outside it, so
+friends can reach it.
 
 ---
 

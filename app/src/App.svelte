@@ -9,6 +9,7 @@
   import Members from './lib/Members.svelte'
   import RoomDialog from './lib/RoomDialog.svelte'
   import Settings from './lib/Settings.svelte'
+  import SettingsIcon from '@lucide/svelte/icons/settings'
   import SharePicker from './lib/SharePicker.svelte'
   import { voice } from './lib/voice.svelte.js'
   import { diag } from './lib/diag.svelte.js'
@@ -135,10 +136,17 @@
         g.fillText(a.join.name, 12, 56)
         const png = await new Promise((res) => cv.toBlob(res, 'image/png'))
         const p = await c.upload(new File([png], `${a.join.name}.png`, { type: 'image/png' }))
-        c.sendMessage(r.id, a.say, [f.id, p.id])
+        // and a second of silence as a WAV, to see audio play in the chat
+        const wav = new DataView(new ArrayBuffer(44 + 16000))
+        const str = (o, t) => [...t].forEach((ch, i) => wav.setUint8(o + i, ch.charCodeAt(0)))
+        str(0, 'RIFF'); wav.setUint32(4, 36 + 16000, true); str(8, 'WAVEfmt '); wav.setUint32(16, 16, true)
+        wav.setUint16(20, 1, true); wav.setUint16(22, 1, true); wav.setUint32(24, 8000, true); wav.setUint32(28, 16000, true)
+        wav.setUint16(32, 2, true); wav.setUint16(34, 16, true); str(36, 'data'); wav.setUint32(40, 16000, true)
+        const w = await c.upload(new File([wav.buffer], `${a.join.name}.wav`, { type: 'audio/wav' }))
+        c.sendMessage(r.id, a.say, [f.id, p.id, w.id])
       }
       if (a.expect) {
-        await until(() => c.chat[r.id]?.messages.some((m) => m.text === a.expect && m.files.length === 2))
+        await until(() => c.chat[r.id]?.messages.some((m) => m.text === a.expect && m.files.length === 3))
         console.info(`auto test: got "${a.expect}" with its file`)
       }
     }
@@ -272,7 +280,7 @@
     {/each}
     <button class="icon add" title="Add a server" onclick={() => ((addInitial = {}), (adding = true))}>+</button>
     <span class="grow"></span>
-    <button class="icon gear" title="Settings: voice & video, your server, this server" onclick={() => (settings = 'voice')}>⚙</button>
+    <button class="icon gear" title="Settings: voice & video, your server, this server" onclick={() => (settings = 'voice')}><SettingsIcon size={22} /></button>
   </nav>
 
   {#if !conn}
@@ -390,7 +398,7 @@
   .icon.add { background: var(--surface-2); font-size: 20px; }
   .icon.host { background: var(--surface-2); font-size: 20px; }
   .grow { flex: 1; }
-  .icon.gear { background: var(--surface-2); font-size: 20px; }
+  .icon.gear { background: var(--surface-2); display: grid; place-items: center; }
   .banner.start { display: flex; border-left-color: var(--warn); }
   .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
   .icon .dot { position: absolute; right: -1px; bottom: -1px; border: 2px solid var(--bg); width: 12px; height: 12px; }

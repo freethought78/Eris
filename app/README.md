@@ -89,7 +89,12 @@ to is newer, and when you press Check for updates.
 
 `src/lib/voice.svelte.js` (livekit-client): one room's voice at a time; voices
 and cameras are received automatically, screen shares only after **Watch** (so
-nothing is sent to those not watching). Sharing uses Electron's display-media
+nothing is sent to those not watching). Voices play through a Web Audio engine
+of ours (LiveKit's webAudioMix), so a person's volume goes to 300%, with a
+limiter (a fast compressor) on each. In the room view (`Chat.svelte`) any camera
+or share (your own included) can be made big, resized by dragging, or put
+fullscreen. When Mullvad is connected, `main/host.js` starts the server under
+`mullvad-exclude`. Sharing uses Electron's display-media
 handler with the app's own picker (`main/main.js`, `SharePicker.svelte`);
 sound with a share is Windows only. Go Live (Play Together) is 🎮 in the panel
 under the rooms.

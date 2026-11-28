@@ -6,6 +6,11 @@
   // and admins add and change rooms. The voice bar sits at the bottom.
   import { voice } from './voice.svelte.js'
   import VoiceBar from './VoiceBar.svelte'
+  import Volume from '@lucide/svelte/icons/volume-2'
+  import Settings from '@lucide/svelte/icons/settings'
+  import MicOff from '@lucide/svelte/icons/mic-off'
+  import Video from '@lucide/svelte/icons/video'
+  import MonitorUp from '@lucide/svelte/icons/monitor-up'
 
   let { conn, selected, onselect, onedit, oncreate, onsettings, canHost = false } = $props()
 
@@ -49,9 +54,9 @@
         {#if conn.unread(r) && r.id !== selected}<span class="dot"></span>{/if}
       </button>
       {#if conn.voiceOn && r.access && !voice.isIn(conn, r.id)}
-        <button class="hover" title="Join the voice" onclick={() => join(r)}>🔊</button>
+        <button class="hover" title="Join the voice" onclick={() => join(r)}><Volume size={15} /></button>
       {/if}
-      {#if staff}<button class="hover gear" title="Room settings" onclick={() => onedit(r)}>⚙</button>{/if}
+      {#if staff}<button class="hover gear" title="Room settings" onclick={() => onedit(r)}><Settings size={14} /></button>{/if}
     </div>
     {#each inVoice(r.id) as m (m.id)}
       {@const l = live(r.id, m.id)}
@@ -62,12 +67,13 @@
         {:else}
           <span class="who">{m.name}{m.id === conn.you?.id ? ' (you)' : ''}</span>
         {/if}
-        {#if l?.muted}<span class="icon" title="Muted">🔇</span>{/if}
-        {#if l?.camera}<span class="icon" title="Camera on">📷</span>{/if}
+        {#if l?.muted}<span class="icon" title="Muted"><MicOff size={13} /></span>{/if}
+        {#if l?.camera}<span class="icon" title="Camera on"><Video size={13} /></span>{/if}
+        {#if l?.sharing}<span class="icon" title="Sharing their screen"><MonitorUp size={13} /></span>{/if}
       </div>
       {#if volumeFor === m.id && l}
         <label class="volume">
-          <input type="range" min="0" max="1" step="0.05" value={voice.volume(m.id)} oninput={(e) => voice.setVolume(m.id, Number(e.target.value))} />
+          <input type="range" min="0" max="3" step="0.05" value={voice.volume(m.id)} oninput={(e) => voice.setVolume(m.id, Number(e.target.value))} title="Up to 300%; a limiter keeps loud moments from crackling" />
           <span>{Math.round(voice.volume(m.id) * 100)}%</span>
         </label>
       {/if}
@@ -90,7 +96,7 @@
   .mark { width: 16px; text-align: center; font-size: 12px; opacity: 0.8; }
   .text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text); margin-left: auto; flex: none; }
-  .hover { background: none; border: none; padding: 4px 6px; color: var(--muted); visibility: hidden; font-size: 12px; }
+  .hover { background: none; border: none; padding: 4px 6px; color: var(--muted); visibility: hidden; display: grid; place-items: center; }
   .room:hover .hover, .room.sel .gear { visibility: visible; }
   .talker { display: flex; align-items: center; gap: 6px; padding: 2px 8px 2px 30px; font-size: 13px; color: var(--muted); }
   .light { width: 8px; height: 8px; border-radius: 50%; background: var(--border); flex: none; }
@@ -98,7 +104,7 @@
   .talker.speaking .who { color: var(--text); }
   .who { background: none; border: none; padding: 0; color: inherit; font: inherit; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   button.who:hover { text-decoration: underline; }
-  .icon { font-size: 11px; }
+  .icon { display: grid; place-items: center; color: var(--muted); }
   .volume { display: flex; align-items: center; gap: 6px; padding: 2px 8px 6px 44px; font-size: 11px; color: var(--muted); }
   .volume input { width: 110px; padding: 0; }
   .spacer { flex: 1; }

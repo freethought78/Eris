@@ -96,6 +96,11 @@ func main() {
 	if err := ctl.writeControlToken(); err != nil {
 		fatal("control token: %v", err)
 	}
+	if liveKitBinary() == "" && program != "" && !*noCheck && !devBuild() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		fetchLiveKit(ctx, program)
+		cancel()
+	}
 	lk := startLiveKit(dir, *media, *public)
 	hub.lk = lk
 	voiceRoutes(mux, store, lk)

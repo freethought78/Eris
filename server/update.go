@@ -240,6 +240,77 @@ func splitVersion(v string) ([3]int, string) {
 
 // checkForUpdate logs when a newer server is out (at start-up, then daily).
 
+// liveKitAsset is the release file with LiveKit for this machine.
+func liveKitAsset() string {
+	name := fmt.Sprintf("livekit-server-%s-%s", runtime.GOOS, runtime.GOARCH)
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	return name
+}
+
+func fileSHA(p string) (string, error) {
+	f, err := os.Open(p)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// installLiveKit puts the release's LiveKit (voice and cameras) beside the
+// program at exe, if it's missing or different; true if it did.
+func installLiveKit(ctx context.Context, r release, exe string) (bool, error) {
+	url, sums := r.asset(liveKitAsset()), r.asset("SHA256SUMS")
+	if url == "" || sums == "" {
+		return false, nil // a release from before LiveKit was carried
+	}
+	want, err := checksumFor(ctx, sums, liveKitAsset())
+	if err != nil {
+		return false, err
+	}
+	name := "livekit-server"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	dst := filepath.Join(filepath.Dir(exe), name)
+	if have, err := fileSHA(dst); err == nil && have == want {
+		return false, nil
+	}
+	tmp := dst + ".new"
+	if err := download(ctx, url, tmp, want); err != nil {
+		os.Remove(tmp)
+		return false, err
+	}
+	os.Remove(dst + ".old")
+	_ = os.Rename(dst, dst+".old") // a running one can be renamed, not overwritten (Windows)
+	if err := os.Rename(tmp, dst); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// fetchLiveKit installs LiveKit from the latest release when it's missing
+// (a server on its own, or one that updated itself before releases carried
+// it).
+func fetchLiveKit(ctx context.Context, exe string) {
+	r, err := latest(ctx, releasesURL())
+	if err != nil {
+		log.Printf("voice: couldn't fetch LiveKit: %v", err)
+		return
+	}
+	log.Printf("voice: fetching LiveKit from Eris %s...", r.version())
+	if ok, err := installLiveKit(ctx, r, exe); err != nil {
+		log.Printf("voice: couldn't fetch LiveKit: %v", err)
+	} else if ok {
+		log.Printf("voice: LiveKit installed beside the server")
+	}
+}
+
 // selfUpdate replaces the program at exe with the latest release's, if newer.
 func selfUpdate(ctx context.Context, api, exe string) (string, error) {
 	r, err := latest(ctx, api)
@@ -273,6 +344,10 @@ func selfUpdate(ctx context.Context, api, exe string) (string, error) {
 	if err := os.Rename(tmp, exe); err != nil {
 		_ = os.Rename(old, exe)
 		return "", err
+	}
+	// LiveKit comes along (its own file beside the server).
+	if _, err := installLiveKit(ctx, r, exe); err != nil {
+		log.Printf("update: LiveKit wasn't updated: %v", err)
 	}
 	return r.version(), nil
 }

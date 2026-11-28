@@ -309,8 +309,8 @@ func main() {
 	}
 	close(r.ready)
 
-	win, err := sdl.CreateWindow("Eris Play Together prototype", int32(*winX), int32(*winY),
-		int32(*winW), int32(*winH), sdl.WINDOW_SHOWN)
+	win, err := sdl.CreateWindow("Eris: Play Together (F11 or double-click: fullscreen)", int32(*winX), int32(*winY),
+		int32(*winW), int32(*winH), sdl.WINDOW_SHOWN|sdl.WINDOW_RESIZABLE)
 	if err != nil {
 		log.Fatalf("window: %v", err)
 	}
@@ -359,6 +359,16 @@ func main() {
 			switch e := ev.(type) {
 			case *sdl.QuitEvent:
 				running = false
+			case *sdl.KeyboardEvent:
+				// F11 or Alt+Enter: fullscreen on and off.
+				if e.Type == sdl.KEYDOWN && e.Repeat == 0 && (e.Keysym.Sym == sdl.K_F11 ||
+					(e.Keysym.Sym == sdl.K_RETURN && e.Keysym.Mod&sdl.KMOD_ALT != 0)) {
+					toggleFullscreen(win)
+				}
+			case *sdl.MouseButtonEvent:
+				if e.Type == sdl.MOUSEBUTTONDOWN && e.Button == sdl.BUTTON_LEFT && e.Clicks == 2 {
+					toggleFullscreen(win)
+				}
 			case *sdl.ControllerDeviceEvent:
 				if e.Type == sdl.CONTROLLERDEVICEADDED {
 					openController(int(e.Which))
@@ -403,7 +413,12 @@ func main() {
 			}
 			ySize := latest.w * latest.h
 			_ = tex.UpdateNV(nil, latest.data[:ySize], latest.w, latest.data[ySize:ySize*3/2], latest.w)
-			_ = ren.Copy(tex, nil, nil)
+			// The picture keeps its shape in any window size (black bars).
+			ow, oh, _ := ren.GetOutputSize()
+			dst := fitRect(int32(latest.w), int32(latest.h), ow, oh)
+			_ = ren.SetDrawColor(0, 0, 0, 255)
+			_ = ren.Clear()
+			_ = ren.Copy(tex, nil, &dst)
 			ren.Present()
 			shown := mono.Now()
 			r.mu.Lock()
@@ -1231,4 +1246,27 @@ func openController(index int) {
 	if gc := sdl.GameControllerOpen(index); gc != nil {
 		logf("controller: %s", gc.Name())
 	}
+}
+
+// toggleFullscreen switches the game window between a window and the whole
+// screen (at the screen's own resolution: no mode change, so it's instant).
+func toggleFullscreen(win *sdl.Window) {
+	if win.GetFlags()&sdl.WINDOW_FULLSCREEN_DESKTOP != 0 {
+		_ = win.SetFullscreen(0)
+	} else {
+		_ = win.SetFullscreen(sdl.WINDOW_FULLSCREEN_DESKTOP)
+	}
+}
+
+// fitRect is the largest rectangle with the picture's shape (w x h) that fits
+// in the window (ow x oh), centred.
+func fitRect(w, h, ow, oh int32) sdl.Rect {
+	if w <= 0 || h <= 0 || ow <= 0 || oh <= 0 {
+		return sdl.Rect{W: ow, H: oh}
+	}
+	dw, dh := ow, ow*h/w
+	if dh > oh {
+		dw, dh = oh*w/h, oh
+	}
+	return sdl.Rect{X: (ow - dw) / 2, Y: (oh - dh) / 2, W: dw, H: dh}
 }

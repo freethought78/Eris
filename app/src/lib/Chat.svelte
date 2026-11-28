@@ -7,6 +7,8 @@
   import { tick } from 'svelte'
   import { voice, attach } from './voice.svelte.js'
   import { stream } from './stream.svelte.js'
+  import Maximize from '@lucide/svelte/icons/maximize'
+  import Minimize from '@lucide/svelte/icons/minimize'
 
   let { conn, room } = $props()
 
@@ -20,6 +22,43 @@
   let input = $state(null)
   let picker = $state(null)
   let stageEl = $state(null)
+
+  // The room's videos: cameras, the share we watch, and our own share's
+  // preview. One can be big (clicked, or the share just watched); the rest
+  // are tiles. The big one's height is dragged and kept on this PC.
+  let videos = $derived([
+    ...(voice.stage ? [{ key: 'share:' + voice.stage.id, kind: 'share', label: `${voice.stage.name}'s screen`, track: voice.stage.track }] : []),
+    ...(voice.myShare ? [{ key: 'share:me', kind: 'share', local: true, label: 'Your screen (what others see)', track: voice.myShare.track }] : []),
+    ...voice.tiles.map((t) => ({ key: 'cam:' + t.id + (t.local ? ':me' : ''), kind: 'cam', label: t.local ? `${t.name} (you)` : t.name, track: t.track, mirror: t.local })),
+  ])
+  let focus = $state('') // the big one's key; '' = the watched share; 'none' = none
+  let big = $derived(
+    focus === 'none' ? null : videos.find((v) => v.key === focus) || (voice.stage ? videos.find((v) => v.key === 'share:' + voice.stage.id) : null),
+  )
+  $effect(() => {
+    if (voice.watching) focus = '' // a share just watched becomes the big one
+  })
+  let stageH = $state(Number(localStorage.getItem('eris-stage-height')) || 380)
+
+  function startResize(e) {
+    const y0 = e.clientY
+    const h0 = stageH
+    const move = (ev) => (stageH = Math.max(140, Math.min(window.innerHeight * 0.85, h0 + ev.clientY - y0)))
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      try {
+        localStorage.setItem('eris-stage-height', String(Math.round(stageH)))
+      } catch {}
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+
+  function full(el) {
+    if (document.fullscreenElement) document.exitFullscreen()
+    else el?.requestFullscreen()
+  }
 
   // Members live for Play Together who are in this room's voice (and us).
   let liveHere = $derived(
@@ -86,17 +125,31 @@
     }
   }
 
+  // addFiles uploads files and sends them straight away (with whatever is
+  // typed), as one message; a file that fails stays shown with its error.
   async function addFiles(files) {
-    for (const f of files) {
-      const p = { key: Math.random(), name: f.name, info: null, error: '' }
-      pending = [...pending, p]
-      try {
-        const info = await conn.upload(f)
-        pending = pending.map((x) => (x.key === p.key ? { ...x, info } : x))
-      } catch (err) {
-        pending = pending.map((x) => (x.key === p.key ? { ...x, error: err.message } : x))
-      }
+    const batch = files.map((f) => ({ key: Math.random(), name: f.name, info: null, error: '' }))
+    pending = [...pending, ...batch]
+    await Promise.all(
+      files.map(async (f, i) => {
+        try {
+          const info = await conn.upload(f)
+          batch[i].info = info
+          pending = pending.map((x) => (x.key === batch[i].key ? { ...x, info } : x))
+        } catch (err) {
+          console.error(`upload failed: ${f.name} (${f.size} bytes): ${err.message}`)
+          pending = pending.map((x) => (x.key === batch[i].key ? { ...x, error: err.message } : x))
+        }
+      }),
+    )
+    const ids = batch.filter((b) => b.info).map((b) => b.info.id)
+    if (ids.length) {
+      conn.sendMessage(room.id, text, ids)
+      text = ''
+      atBottom = true
     }
+    const sent = new Set(batch.filter((b) => b.info).map((b) => b.key))
+    pending = pending.filter((x) => !sent.has(x.key))
   }
 
   function drop(e) {
@@ -148,6 +201,8 @@
   }
 
   const isImage = (f) => /^image\/(png|jpeg|gif|webp)$/.test(f.type)
+  const isAudio = (f) => /^audio\/(mpeg|mp3|ogg|wav|x-wav|wave|mp4|x-m4a|aac|flac|x-flac|webm|opus)$/.test(f.type)
+  const isVideo = (f) => /^video\/(mp4|webm|ogg)$/.test(f.type)
   const size = (n) => (n < 1024 ? `${n} B` : n < 1 << 20 ? `${(n / 1024).toFixed(0)} KB` : `${(n / (1 << 20)).toFixed(1)} MB`)
 
   function when(ms) {
@@ -209,25 +264,32 @@
       {/each}
     </div>
   {/if}
-  {#if voice.isIn(conn, room.id) && voice.stage}
-    <div class="stage" bind:this={stageEl}>
-      <div class="screen" use:attach={voice.stage.track}></div>
-      <div class="stagebar">
-        <span>{voice.stage.name}'s screen</span>
-        <span class="grow"></span>
-        <button onclick={() => stageEl.requestFullscreen()}>Fullscreen</button>
-        <button onclick={() => voice.unwatch()}>Stop watching</button>
-      </div>
-    </div>
-  {/if}
-  {#if voice.isIn(conn, room.id) && voice.tiles.length}
-    <div class="tiles">
-      {#each voice.tiles as t (t.id + (t.local ? '-me' : ''))}
-        <div class="tile" class:me={t.local}>
-          <div class="video" use:attach={t.track}></div>
-          <span class="tname">{t.name}{t.local ? ' (you)' : ''}</span>
+  {#if voice.isIn(conn, room.id) && videos.length}
+    <div class="media">
+      {#if big}
+        <div class="stage" style="height: {stageH}px" bind:this={stageEl} ondblclick={() => full(stageEl)} role="presentation">
+          <div class="screen" class:mirror={big.mirror} use:attach={big.track}></div>
+          <div class="stagebar">
+            <span>{big.label}</span>
+            <span class="grow"></span>
+            <button title="Fullscreen (or double-click)" onclick={() => full(stageEl)}><Maximize size={15} /></button>
+            {#if big.kind === 'share' && !big.local}<button onclick={() => voice.unwatch()}>Stop watching</button>{/if}
+            <button title="Back to small" onclick={() => (focus = 'none')}><Minimize size={15} /></button>
+          </div>
         </div>
-      {/each}
+        <div class="resize" title="Drag to resize" onpointerdown={startResize} role="separator" aria-orientation="horizontal"></div>
+      {/if}
+      <div class="tiles">
+        {#each videos.filter((v) => v.key !== big?.key) as v (v.key)}
+          <div class="tile" class:share={v.kind === 'share'}>
+            <button class="pick" title="Click to enlarge, double-click for fullscreen" onclick={() => (focus = v.key)} ondblclick={(e) => full(e.currentTarget.parentElement)}>
+              <div class="video" class:mirror={v.mirror} use:attach={v.track}></div>
+            </button>
+            <span class="tname">{v.label}</span>
+            <button class="tfull" title="Fullscreen" onclick={(e) => full(e.currentTarget.parentElement)}><Maximize size={13} /></button>
+          </div>
+        {/each}
+      </div>
     </div>
   {/if}
 
@@ -273,6 +335,20 @@
               <button class="pic" onclick={() => (preview = conn.fileUrl(f.id))} title={f.name}>
                 <img src={conn.fileUrl(f.id)} alt={f.name} loading="lazy" onload={() => atBottom && toBottom()} />
               </button>
+            {:else if isAudio(f)}
+              <div class="file media">
+                <div class="fname">{f.name} <span class="muted small">{size(f.size)}</span></div>
+                <div class="row2">
+                  <audio controls preload="metadata" src={conn.fileUrl(f.id)}></audio>
+                  <button onclick={() => window.eris.download(conn.fileUrl(f.id))}>Save</button>
+                </div>
+              </div>
+            {:else if isVideo(f)}
+              <div class="file media">
+                <video controls preload="metadata" src={conn.fileUrl(f.id)}><track kind="captions" /></video>
+                <div class="row2"><span class="fname">{f.name} <span class="muted small">{size(f.size)}</span></span>
+                  <button onclick={() => window.eris.download(conn.fileUrl(f.id))}>Save</button></div>
+              </div>
             {:else}
               <div class="file">
                 <span class="icon">📄</span>
@@ -326,17 +402,27 @@
   .cards { display: grid; gap: 6px; padding: 10px 18px 0; }
   .card { display: flex; align-items: center; gap: 10px; justify-content: space-between; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 10px; }
   .card button { padding: 4px 12px; font-size: 13px; }
-  .stage { margin: 10px 18px 0; background: #000; border-radius: var(--radius); overflow: hidden; display: flex; flex-direction: column; }
-  .stage .screen { flex: 1; display: grid; place-items: center; min-height: 0; }
-  .stage .screen :global(video) { width: 100%; max-height: 52vh; object-fit: contain; display: block; }
-  .stage:fullscreen .screen :global(video) { max-height: none; height: calc(100vh - 44px); }
-  .stagebar { display: flex; gap: 8px; align-items: center; padding: 6px 10px; background: rgba(255, 255, 255, 0.05); font-size: 13px; }
-  .stagebar button { padding: 3px 10px; font-size: 12px; }
-  .tiles { display: flex; gap: 8px; padding: 10px 18px; border-bottom: 1px solid var(--border); overflow-x: auto; background: #10101f; }
-  .tile { position: relative; width: 240px; aspect-ratio: 16 / 9; background: #000; border-radius: var(--radius); overflow: hidden; flex: none; }
+  .media { padding: 10px 18px 0; display: grid; gap: 6px; }
+  .stage { background: #000; border-radius: var(--radius); overflow: hidden; display: flex; flex-direction: column; min-height: 140px; }
+  .stage .screen { flex: 1; min-height: 0; display: grid; place-items: center; }
+  .stage .screen :global(video) { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .stage:fullscreen { height: 100vh !important; }
+  .stagebar { display: flex; gap: 6px; align-items: center; padding: 4px 8px; background: rgba(255, 255, 255, 0.06); font-size: 13px; }
+  .stagebar button { padding: 3px 8px; font-size: 12px; display: inline-grid; place-items: center; }
+  .resize { height: 8px; margin: -3px 0; cursor: ns-resize; border-radius: 4px; background: linear-gradient(var(--border), var(--border)) center / 40px 3px no-repeat; }
+  .resize:hover { background-color: var(--surface-2); }
+  .mirror :global(video) { transform: scaleX(-1); }
+  .tiles { display: flex; gap: 8px; overflow-x: auto; }
+  .tile { position: relative; width: 220px; aspect-ratio: 16 / 9; background: #000; border-radius: var(--radius); overflow: hidden; flex: none; }
+  .tile.share { outline: 1px solid var(--border); }
+  .tile .pick { position: absolute; inset: 0; padding: 0; border: none; background: none; cursor: zoom-in; }
+  .tile .video { width: 100%; height: 100%; }
   .tile :global(video) { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .tile.me :global(video) { transform: scaleX(-1); }
-  .tname { position: absolute; left: 6px; bottom: 6px; background: rgba(0, 0, 0, 0.6); padding: 1px 6px; border-radius: 4px; font-size: 12px; }
+  .tile.share :global(video) { object-fit: contain; }
+  .tile:fullscreen :global(video) { object-fit: contain; }
+  .tname { position: absolute; left: 6px; bottom: 6px; background: rgba(0, 0, 0, 0.6); padding: 1px 6px; border-radius: 4px; font-size: 12px; pointer-events: none; }
+  .tfull { position: absolute; right: 4px; top: 4px; padding: 3px; display: none; place-items: center; background: rgba(0, 0, 0, 0.6); border: none; }
+  .tile:hover .tfull { display: grid; }
   header h2 { margin: 0; font-size: 16px; text-transform: none; letter-spacing: 0; color: var(--text); }
   .mark { color: var(--muted); }
   .messages { flex: 1; overflow-y: auto; padding: 8px 18px 12px; }
@@ -357,6 +443,10 @@
   .pic img { max-width: min(420px, 100%); max-height: 320px; border-radius: var(--radius); display: block; }
   .file { display: inline-flex; align-items: center; gap: 10px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; margin: 4px 0; max-width: 420px; }
   .file .icon { font-size: 22px; }
+  .file.media { display: grid; gap: 6px; max-width: 440px; }
+  .file.media .row2 { display: flex; align-items: center; gap: 8px; }
+  .file.media audio { width: 320px; height: 36px; }
+  .file.media video { width: 100%; max-height: 320px; border-radius: 4px; background: #000; }
   .fname { font-weight: 600; word-break: break-all; }
   .compose { padding: 0 18px 16px; }
   .pending { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }

@@ -40,6 +40,7 @@ class Voice {
   shares = $state([]) // {id, name, local}: screens being shared
   watching = $state('') // whose share we receive
   stage = $state(null) // {id, name, track}: the share being watched
+  myShare = $state(null) // {track}: our own share, for its preview
   sharing = $state(false) // we share our screen
   error = $state('')
   hearing = $state(0) // others' audio tracks being played
@@ -47,6 +48,7 @@ class Voice {
   devices = $state(store.get('devices', {})) // audioinput, audiooutput, videoinput -> device id
 
   #room = null
+  #ctx = null // the call's audio engine: volumes above 100%, with a limiter
   #audio = new Map() // track sid -> element
   #box = null
 
@@ -67,7 +69,11 @@ class Voice {
       this.#reset()
       return
     }
+    // Voices play through an audio engine of ours, so a person's volume can
+    // go up to 300%, with a limiter on each so loud moments don't crackle.
+    this.#ctx = new AudioContext()
     const room = new Room({
+      webAudioMix: { audioContext: this.#ctx },
       adaptiveStream: true,
       dynacast: true,
       audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, deviceId: this.devices.audioinput },
@@ -104,6 +110,7 @@ class Voice {
       return
     }
     if (this.#room !== room) return // left while connecting
+    this.#ctx?.resume().catch(() => {})
     this.state = 'connected'
     conn.send({ type: 'voice', room_id: roomId })
     console.info(`voice: joined room ${roomId} on ${conn.entry.address}`)
@@ -220,8 +227,13 @@ class Voice {
       const rep = await track.getRTCStatsReport()
       if (!rep) return
       rep.forEach((s) => {
+        if (s.type === 'media-source' && s.kind === 'audio' && dir === 'out') {
+          // Our microphone's loudness, as sent (0..1; ~0.1 is quiet speech).
+          out.mic_level = level(s)
+        }
         if (s.type === 'inbound-rtp' || s.type === 'outbound-rtp') {
           out.tracks.push({
+            level: s.kind === 'audio' && s.type === 'inbound-rtp' ? level(s) : undefined,
             dir, from, source, kind: s.kind,
             lost: s.packetsLost, packets: s.packetsReceived ?? s.packetsSent, jitter_ms: s.jitter != null ? Math.round(s.jitter * 1000) : undefined,
             fps: s.framesPerSecond, w: s.frameWidth, h: s.frameHeight, bytes: s.bytesReceived ?? s.bytesSent,
@@ -235,6 +247,11 @@ class Voice {
         }
       })
     }
+    // Loudness: the average over the call (root of energy per second), and now.
+    const level = (s) => ({
+      avg: s.totalSamplesDuration > 0 ? Math.round(Math.sqrt(s.totalAudioEnergy / s.totalSamplesDuration) * 1000) / 1000 : undefined,
+      now: s.audioLevel != null ? Math.round(s.audioLevel * 1000) / 1000 : undefined,
+    })
     for (const p of room.remoteParticipants.values()) {
       for (const pub of p.trackPublications.values()) await read(pub.track, p.name || p.identity, pub.source, 'in')
     }
@@ -296,10 +313,21 @@ class Voice {
 
   #applyDeafen() {
     for (const el of this.#audio.values()) el.muted = this.deafened
+    if (this.#ctx) (this.deafened ? this.#ctx.suspend() : this.#ctx.resume()).catch(() => {})
   }
 
   #subscribed(track, pub, p) {
     if (track.kind === Track.Kind.Audio) {
+      if (this.#ctx && track.setWebAudioPlugins) {
+        // A limiter: leaves normal speech alone, holds peaks below clipping.
+        const lim = this.#ctx.createDynamicsCompressor()
+        lim.threshold.value = -3
+        lim.knee.value = 0
+        lim.ratio.value = 20
+        lim.attack.value = 0.002
+        lim.release.value = 0.15
+        track.setWebAudioPlugins([lim])
+      }
       const el = track.attach()
       el.muted = this.deafened
       this.#container().appendChild(el)
@@ -341,6 +369,7 @@ class Voice {
       speaking: p.isSpeaking,
       muted: !p.isMicrophoneEnabled,
       camera: p.isCameraEnabled,
+      sharing: p.isScreenShareEnabled,
       local: p === room.localParticipant,
     }))
     const tiles = []
@@ -361,12 +390,16 @@ class Voice {
     this.tiles = tiles
     this.shares = shares
     this.stage = stage
-    this.sharing = !!room.localParticipant.getTrackPublication(Track.Source.ScreenShare)
+    const mine = room.localParticipant.getTrackPublication(Track.Source.ScreenShare)
+    this.sharing = !!mine
+    this.myShare = mine?.track ? { track: mine.track } : null
   }
 
   #reset() {
     for (const el of this.#audio.values()) el.remove()
     this.#audio.clear()
+    this.#ctx?.close().catch(() => {})
+    this.#ctx = null
     this.hearing = 0
     this.#room = null
     this.conn = null
@@ -379,6 +412,7 @@ class Voice {
     this.shares = []
     this.watching = ''
     this.stage = null
+    this.myShare = null
     this.sharing = false
   }
 }
@@ -391,6 +425,9 @@ export function attach(node, track) {
   node.appendChild(el)
   return {
     update(t) {
+      // The video list is rebuilt on every change in the call (someone
+      // speaking, muting...): re-attaching the same video made it blink.
+      if (t === track) return
       track.detach(el)
       el.remove()
       track = t

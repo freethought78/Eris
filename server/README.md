@@ -65,8 +65,10 @@ doesn't check at all; `eris-server -update` updates by hand and exits;
 on in a dev build).
 
 **Voice and cameras** (`voice.go`, DESIGN.md 4.4): the server runs LiveKit
-(`livekit-server`, which must sit next to the program; the Linux app puts it
-there, and `tools/livekit.sh` fetches the pinned version), with keys made on
+(`livekit-server`, next to the program: the Linux app puts it there, releases
+carry it (`livekit-server-<os>-amd64`) and a self-update brings it along, and a
+server started without it fetches it from the latest release; `tools/livekit.sh`
+fetches the pinned version for builds), with keys made on
 first run (`livekit.json`) and a config written at each start (`livekit.yaml`)
 in the data folder; its log is in `logs/`. Its signalling goes
 through this server's port (`/rtc`); the audio and video use one UDP port,
