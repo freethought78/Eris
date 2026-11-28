@@ -1,7 +1,7 @@
 <script>
   // Voice & video settings (a section of Settings): which microphone,
-  // speakers and camera Eris uses (kept on this PC). Echo cancellation and
-  // noise suppression are on.
+  // speakers and camera Eris uses, and how much noise is taken out of your
+  // microphone (kept on this PC). Echo cancellation is on.
   import { onMount } from 'svelte'
   import { voice } from './voice.svelte.js'
 
@@ -19,6 +19,13 @@
     if (picked && list.some((d) => d.deviceId === picked)) return picked
     return list.find((d) => d.deviceId === 'default')?.deviceId || list[0]?.deviceId || 'default'
   }
+
+  // Noise reduction on your microphone (what others hear).
+  const noiseModes = [
+    ['strong', 'Strong', 'Removes keyboards, fans, traffic and room noise, keeping your voice. Music and game sound near your microphone are removed too.'],
+    ['standard', 'Standard', 'Light: takes out steady hum. Uses the least of your PC.'],
+    ['off', 'Off', 'Your microphone as it is: for a good microphone, an instrument, or a noise filter you already use (NVIDIA Broadcast, NoiseTorch...).'],
+  ]
 
   const kinds = [
     ['audioinput', 'Microphone'],
@@ -43,7 +50,16 @@
           </select>
         </label>
       {/each}
-      <p class="muted small">Echo cancellation and noise suppression are on. Changes apply straight away, also in a call.</p>
+      <label>
+        Noise reduction
+        <select value={voice.noise} onchange={(e) => voice.setNoise(e.target.value)}>
+          {#each noiseModes as [value, name] (value)}
+            <option {value}>{name}</option>
+          {/each}
+        </select>
+        <span class="muted small hint">{noiseModes.find(([v]) => v === voice.noise)?.[2]}</span>
+      </label>
+      <p class="muted small">Echo cancellation is on. Changes apply straight away, also in a call.</p>
     {/if}
 </div>
 
@@ -57,4 +73,5 @@
   label { display: grid; gap: 6px; align-content: start; font-size: 13px; font-weight: 600; }
   select { font: inherit; font-weight: 400; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 8px; }
   .small { font-size: 12px; margin: 0; }
+  .hint { font-weight: 400; }
 </style>

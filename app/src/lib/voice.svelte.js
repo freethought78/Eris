@@ -11,6 +11,7 @@
 // while someone watches), to keep traffic down.
 import { AudioPresets, Room, RoomEvent, Track, VideoPresets, createLocalScreenTracks } from 'livekit-client'
 import { httpBase } from './conn.svelte.js'
+import { Rnnoise } from './noise.js'
 
 const store = {
   get(key, fallback) {
@@ -47,6 +48,9 @@ class Voice {
   hearing = $state(0) // others' audio tracks being played
   volumes = $state(store.get('volumes', {})) // member id -> 0..1
   devices = $state(store.get('devices', {})) // audioinput, audiooutput, videoinput -> device id
+  // Noise reduction on our microphone: 'off', 'standard' (the browser
+  // engine's own, the lightest) or 'strong' (RNNoise, noise.js).
+  noise = $state(store.get('noise', 'strong'))
 
   #room = null
   // Who's speaking, measured here from each voice's own sound (see #meter).
@@ -85,7 +89,7 @@ class Voice {
       webAudioMix: { audioContext: this.#ctx },
       adaptiveStream: true,
       dynacast: true,
-      audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, deviceId: this.devices.audioinput },
+      audioCaptureDefaults: this.#capture(),
       videoCaptureDefaults: { resolution: VideoPresets.h540.resolution, deviceId: this.devices.videoinput },
       audioOutput: { deviceId: this.devices.audiooutput },
     })
@@ -126,6 +130,7 @@ class Voice {
     console.info(`voice: joined room ${roomId} on ${conn.entry.address}`)
     try {
       await room.localParticipant.setMicrophoneEnabled(!this.muted && !this.deafened)
+      await this.#applyNoise()
     } catch (err) {
       this.error = `Your microphone couldn't be used (${err.message || err}); you can still listen.`
     }
@@ -329,7 +334,7 @@ class Voice {
   async stats() {
     const room = this.#room
     if (!room) return null
-    const out = { room: this.roomId, people: room.numParticipants, quality: room.localParticipant.connectionQuality, muted: this.muted, deafened: this.deafened, tracks: [] }
+    const out = { room: this.roomId, people: room.numParticipants, quality: room.localParticipant.connectionQuality, muted: this.muted, deafened: this.deafened, noise: this.noise, tracks: [] }
     const read = async (track, from, source, dir) => {
       if (!track?.getRTCStatsReport) return
       const rep = await track.getRTCStatsReport()
@@ -433,9 +438,53 @@ class Voice {
     }
   }
 
+  // #capture: how the microphone is opened. The browser engine's noise
+  // suppression only for 'standard' (RNNoise does it for 'strong', and two
+  // filters in a row chop speech); echo cancellation and loudness always.
+  #capture() {
+    return { echoCancellation: true, noiseSuppression: this.noise === 'standard', autoGainControl: true, deviceId: this.devices.audioinput }
+  }
+
+  // #applyNoise puts RNNoise on our microphone for 'strong', and takes it
+  // off otherwise.
+  async #applyNoise() {
+    const track = this.#room?.localParticipant.getTrackPublication(Track.Source.Microphone)?.track
+    if (!track) return
+    const on = track.getProcessor()?.name === 'rnnoise'
+    try {
+      if (this.noise === 'strong' && !on) {
+        await track.setProcessor(new Rnnoise())
+        console.info('noise reduction: strong (RNNoise)')
+      } else if (this.noise !== 'strong' && on) {
+        await track.stopProcessor()
+        console.info(`noise reduction: ${this.noise}`)
+      }
+    } catch (err) {
+      console.error(`noise reduction: ${err.message || err}`)
+      this.error = `Strong noise reduction couldn't start (${err.message || err}); using your microphone as it is.`
+    }
+    this.#meterMic()
+  }
+
+  async setNoise(mode) {
+    this.noise = mode
+    store.set('noise', mode)
+    if (this.#room) this.#room.options.audioCaptureDefaults = { ...this.#room.options.audioCaptureDefaults, ...this.#capture() }
+    const track = this.#room?.localParticipant.getTrackPublication(Track.Source.Microphone)?.track
+    if (!track) return
+    try {
+      if (this.noise !== 'strong' && track.getProcessor()) await track.stopProcessor()
+      await track.restartTrack(this.#capture()) // the browser engine's suppression on or off
+    } catch (err) {
+      console.error(`noise reduction: ${err.message || err}`)
+    }
+    await this.#applyNoise()
+  }
+
   async #applyMic() {
     try {
       await this.#room?.localParticipant.setMicrophoneEnabled(!this.muted && !this.deafened)
+      await this.#applyNoise()
     } catch (err) {
       this.error = `Your microphone couldn't be used (${err.message || err}).`
     }
@@ -508,7 +557,8 @@ class Voice {
   // #meterMic measures our own microphone's current track, if any.
   #meterMic() {
     const lp = this.#room?.localParticipant
-    const t = lp?.getTrackPublication(Track.Source.Microphone)?.track?.mediaStreamTrack
+    const track = lp?.getTrackPublication(Track.Source.Microphone)?.track
+    const t = track?.getProcessor()?.processedTrack || track?.mediaStreamTrack // what others hear
     const m = this.#meters.get('mic')
     if (m?.mst === t) return
     if (t) this.#meter('mic', lp.identity, t)

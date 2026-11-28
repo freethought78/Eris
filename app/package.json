@@ -15,6 +15,7 @@
   },
   "devDependencies": {
     "@lucide/svelte": "1.72.0",
+    "@sapphi-red/web-noise-suppressor": "0.4.1",
     "@sveltejs/vite-plugin-svelte": "7.3.1",
     "electron": "44.11.1",
     "electron-builder": "26.18.1",

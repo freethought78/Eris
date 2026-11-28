@@ -55,8 +55,9 @@ you say so.
 
 The first time you open a private room, Eris asks for its password; you only give it once.
 
-**Remove server** (at the top, red) takes a server off your list and forgets your
-membership on this PC: to come back you need its join link, and you join as a new member.
+**Removing a server:** right-click its icon on the left and choose **Remove server**. It
+comes off your list and this PC forgets your membership: to come back you need its join
+link, and you join as a new member.
 
 ## Chatting
 
@@ -88,6 +89,12 @@ membership on this PC: to come back you need its join link, and you join as a ne
   themselves). Others in the room see a card saying you're sharing,
   and only those who press **Watch** receive it, so nobody's connection carries a share
   they aren't watching. Watching opens it big above the chat.
+- **Noise reduction** (Settings, Voice & video) cleans up your microphone before others
+  hear it. **Strong** (the default) removes keyboards, fans, traffic and room noise and
+  keeps your voice, but also removes music and game sound near your microphone.
+  **Standard** only takes out steady hum and uses the least of your PC. **Off** sends your
+  microphone as it is: for a good microphone, an instrument, or a noise filter you already
+  use (NVIDIA Broadcast, NoiseTorch...).
 - Click someone's name under the room to change how loud they are, from silent to 300%
   (just for you; a limiter keeps loud moments from crackling).
 

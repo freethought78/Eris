@@ -27,6 +27,7 @@
   let roomSel = $state({}) // server address -> the room shown
   let roomDialog = $state(null) // {room} while adding or changing a room
   let settings = $state(null) // the section open in Settings, or null
+  let serverMenu = $state(null) // {address, x, y}: a server icon's right-click menu
   let hostInfo = $state(null) // this PC's server (main/host.js status)
 
   // This PC's server: is it running, and which saved server is it?
@@ -287,10 +288,20 @@
   </div>
 {/if}
 
+{#if serverMenu}
+  <!-- A server icon's right-click menu. -->
+  <div class="menu-shade" role="presentation" onclick={() => (serverMenu = null)} oncontextmenu={(e) => (e.preventDefault(), (serverMenu = null))}></div>
+  <div class="menu" role="menu" style="left: {serverMenu.x}px; top: {serverMenu.y}px">
+    <button class="danger-item" role="menuitem" onclick={() => { const a = serverMenu.address; serverMenu = null; remove(a) }}>Remove server...</button>
+  </div>
+{/if}
+<svelte:window onkeydown={(e) => e.key === 'Escape' && serverMenu && (serverMenu = null)} />
+
 <div class="layout">
   <nav class="servers">
     {#each servers as s (s.address)}
-      <button class="icon" class:sel={s.address === selected} class:pic={!!conns[s.address]?.icon} title={conns[s.address]?.serverName || s.address} onclick={() => (selected = s.address)}>
+      <button class="icon" class:sel={s.address === selected} class:pic={!!conns[s.address]?.icon} title={conns[s.address]?.serverName || s.address} onclick={() => (selected = s.address)}
+        oncontextmenu={(e) => (e.preventDefault(), (serverMenu = { address: s.address, x: e.clientX, y: e.clientY }))}>
         {#if conns[s.address]?.icon}
           <img src={conns[s.address].iconUrl()} alt="" />
         {:else}
@@ -320,9 +331,6 @@
         <div class="title">
           <h1>{conn.serverName || conn.entry.address}{#if info.dev}<span class="devtag" title="Built from the source folder (tools/dev.sh), not a release">DEV</span>{/if}</h1>
           <span class="muted">You are {conn.you?.name || conn.entry.name}{conn.you?.role === 'owner' ? ' (Owner)' : ''} · {cap(conn.status)}{conn.serverVersion ? ` · Server ${conn.serverVersion}` : ''} · App {info.version}</span>
-        </div>
-        <div class="actions">
-          <button class="danger" onclick={() => remove(conn.entry.address)} title="Takes this server off your list and forgets your membership on this PC">Remove server</button>
         </div>
       </header>
 
@@ -439,13 +447,17 @@
   h1 { margin: 0 0 2px; font-size: 18px; }
   .title .muted { font-size: 12px; }
   .devtag { background: var(--warn); color: #1a1a2e; font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 4px; margin-left: 8px; vertical-align: middle; }
-  .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .banner { background: var(--surface-2); border-left: 3px solid var(--highlight); padding: 8px 12px; margin: 8px 12px 0; border-radius: var(--radius); display: flex; align-items: center; gap: 8px; }
   .banner.warn { border-left-color: var(--warn); display: block; }
   .banner.warn p { margin: 0 0 8px; }
   .banner.ask { border-left-color: var(--good); }
   .banner.ask span { flex: 1; }
   .banner.ask button { padding: 4px 12px; font-size: 13px; }
+  .menu-shade { position: fixed; inset: 0; z-index: 20; }
+  .menu { position: fixed; z-index: 21; min-width: 180px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 4px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4); }
+  .menu button { display: block; width: 100%; text-align: left; background: none; border: none; padding: 7px 10px; border-radius: 4px; }
+  .menu button:hover { background: var(--surface-2); }
+  .menu .danger-item { color: var(--highlight); }
   .banner .x { margin-left: auto; background: none; border: none; padding: 0 6px; }
   .body { flex: 1; display: flex; min-height: 0; }
   .tests { flex: 1; overflow: auto; padding: 16px 24px; }
